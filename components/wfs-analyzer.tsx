@@ -1314,9 +1314,7 @@ export default function WfsAnalyzer() {
                       }
                       updateUrlParameter("");
 
-                      // If URL changes significantly, clear all previous data
                       if (e.target.value.trim() !== analyzedUrl) {
-                        // Clear all data states when URL changes
                         setSelectedLayer(null);
                         setAvailableLayers([]);
                         setWfsData(null);
@@ -1345,8 +1343,56 @@ export default function WfsAnalyzer() {
                         setShowDatasetDropdown(false);
                       }
                     }}
-                    className="py-6 px-4 pr-10 text-lg border-0 focus-visible:ring-1 focus-visible:ring-[#1a3a8f] focus-visible:ring-offset-0 rounded-l-md !rounded-r-none"
+                    className="py-6 px-4 pr-20 text-lg border-0 focus-visible:ring-1 focus-visible:ring-[#1a3a8f] focus-visible:ring-offset-0 rounded-l-md !rounded-r-none"
                   />
+
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    {datasetsParamUrl && searchDatasets.length > 0 && (
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => setShowDatasetDropdown((prev) => !prev)}
+                        className="h-6 w-6 flex items-center justify-center text-gray-400 hover:text-gray-700"
+                        aria-label="Toggle dataset dropdown"
+                      >
+                        {showDatasetDropdown ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </button>
+                    )}
+
+                    {wfsUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWfsUrl("");
+                          setShowDatasetDropdown(false);
+                          setSelectedLayer(null);
+                          setAvailableLayers([]);
+                          setWfsData(null);
+                          setFilteredData(null);
+                          setAttributes([]);
+                          setTotalFeatureCount(null);
+                          setHasGeometry(false);
+                          setSourceProjection("EPSG:4326");
+                          setIsFiltered(false);
+                          setHasProjectionIssue(false);
+                          setFocusedFeature(null);
+                          setError(null);
+                          setErrorType(null);
+                          setAnalyzedUrl("");
+                          updateUrlParameter("");
+                        }}
+                        className="h-6 w-6 flex items-center justify-center text-gray-400 hover:text-gray-700"
+                        aria-label="Clear input"
+                      >
+                        {/* <X className="h-4 w-4" /> */}
+                      </button>
+                    )}
+                  </div>
+
                   {wfsUrl && (
                     <button
                       variant="ghost"
@@ -1405,7 +1451,7 @@ export default function WfsAnalyzer() {
               </div>
 
               {datasetsParamUrl && showDatasetDropdown && (
-                <div className="absolute z-40 mt-1 w-full rounded-md border bg-white shadow-lg">
+                <div className="absolute mt-1 w-full rounded-md border bg-white shadow-lg z-[100]">
                   <div ref={datasetListRef} className="max-h-64 overflow-auto">
                     {isDatasetsLoading ? (
                       <div className="p-3 text-sm text-slate-500 flex items-center gap-2">
