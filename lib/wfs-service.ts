@@ -2,6 +2,13 @@
 const DEFAULT_MAX_FEATURES = 500;
 const WFS_PROXY_PATH = "/api/wfs-proxy";
 
+// Maximum length of error response body to include in error messages
+const ERROR_BODY_PREVIEW_LENGTH = 500;
+const UNSUPPORTED_FORMAT_PREVIEW_LENGTH = 200;
+
+// Supported WFS versions, ordered by preference
+const SUPPORTED_WFS_VERSIONS = ["2.0.0", "1.1.0", "1.0.0"] as const;
+
 export interface LayerInfo {
   id: string;
   title: string;
@@ -37,25 +44,6 @@ export type SchemaInfo = {
   }[];
 };
 
-// const STANDARD_WFS_QUERY_KEYS = new Set([
-//   "service",
-//   "version",
-//   "request",
-//   "typename",
-//   "typenames",
-//   "outputformat",
-//   "count",
-//   "maxfeatures",
-//   "srsname",
-//   "resulttype",
-//   "startindex",
-//   "startposition",
-//   "namespaces",
-//   "bbox",
-//   "filter",
-//   "propertyname",
-// ]);
-
 function getHeaderValue(
   headers: HeadersInit | undefined,
   name: string
@@ -82,7 +70,7 @@ function getHeaderValue(
     (key) => key.toLowerCase() === name.toLowerCase()
   );
 
-  return matchedKey ? record[matchedKey] ?? null : null;
+  return matchedKey ? (record[matchedKey] ?? null) : null;
 }
 
 function isLikelyCorsError(error: unknown): boolean {
@@ -120,7 +108,7 @@ async function fetchWithCorsProxy(
 
     return fetch(proxyUrl.toString(), {
       method: "GET",
-      cache: "no-store",
+      cache: "no-store"
     });
   }
 }
@@ -143,6 +131,18 @@ function parseXmlOrThrow(xmlText: string, label = "XML"): XMLDocument {
 }
 
 function allByLocalName(root: ParentNode, localName: string): Element[] {
+  // Use getElementsByTagNameNS for better performance than filtering all descendants.
+  // Works on both Document and Element nodes.
+  if (
+    typeof (root as Element).getElementsByTagNameNS === "function" ||
+    typeof (root as XMLDocument).getElementsByTagNameNS === "function"
+  ) {
+    const collection = (
+      root as Element | XMLDocument
+    ).getElementsByTagNameNS("*", localName);
+    return Array.from(collection);
+  }
+
   return Array.from(root.querySelectorAll("*")).filter(
     (el) => el.localName === localName
   );
@@ -175,9 +175,7 @@ function firstByLocalName(
 }
 
 function childrenByLocalName(parent: Element, localName: string): Element[] {
-  return Array.from(parent.children).filter(
-    (el) => el.localName === localName
-  );
+  return Array.from(parent.children).filter((el) => el.localName === localName);
 }
 
 function firstChildByLocalName(
@@ -187,7 +185,10 @@ function firstChildByLocalName(
   return childrenByLocalName(parent, localName)[0];
 }
 
-function firstChildText(parent: Element, localName: string): string | undefined {
+function firstChildText(
+  parent: Element,
+  localName: string
+): string | undefined {
   return firstChildByLocalName(parent, localName)?.textContent?.trim();
 }
 
@@ -257,27 +258,6 @@ function getOgcExceptionMessage(xmlDoc: XMLDocument): string | null {
     : exceptionReport.textContent?.trim() || "Unknown OGC exception";
 }
 
-// function createRequestUrl(
-//   baseUrl: string,
-//   requestParams: URLSearchParams,
-//   stripKeys: Set<string> = STANDARD_WFS_QUERY_KEYS
-// ): string {
-//   const url = new URL(baseUrl);
-//   const finalParams = new URLSearchParams();
-
-//   for (const [key, value] of url.searchParams.entries()) {
-//     if (!stripKeys.has(key.toLowerCase())) {
-//       finalParams.set(key, value);
-//     }
-//   }
-
-//   for (const [key, value] of requestParams.entries()) {
-//     finalParams.set(key, value);
-//   }
-
-//   return `${url.origin}${url.pathname}?${finalParams.toString()}`;
-// }
-
 function createRequestUrl(
   baseUrl: string,
   requestParams: URLSearchParams
@@ -298,9 +278,7 @@ function getPreferredCapabilitiesVersions(baseUrl: string): string[] {
     new Set(
       [
         requestedVersion,
-        "2.0.0",
-        "1.1.0",
-        "1.0.0",
+        ...SUPPORTED_WFS_VERSIONS,
       ].filter((value): value is string => Boolean(value))
     )
   );
@@ -308,6 +286,45 @@ function getPreferredCapabilitiesVersions(baseUrl: string): string[] {
 
 function isWfs2(version?: string): boolean {
   return Boolean(version?.startsWith("2."));
+}
+
+/**
+ * Try an async operation across multiple WFS versions, returning the first success.
+ * Throws the last error encountered if all attempts fail.
+ */
+async function tryAcrossVersions<T>(
+  versions: string[],
+  attempt: (version: string) => Promise<T>,
+  errorContext: string
+): Promise<T> {
+  let lastError: unknown;
+
+  for (const version of versions) {
+    try {
+      return await attempt(version);
+    } catch (error) {
+      lastError = error;
+      console.warn(`${errorContext} failed for WFS ${version}`, error);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`${errorContext} failed for all attempted WFS versions.`);
+}
+
+function getEffectiveVersions(
+  baseUrl: string,
+  layer?: LayerInfo
+): string[] {
+  return Array.from(
+    new Set(
+      [
+        layer?.serviceVersion,
+        ...getPreferredCapabilitiesVersions(baseUrl),
+      ].filter((value): value is string => Boolean(value))
+    )
+  );
 }
 
 function buildCapabilitiesParams(version: string): URLSearchParams {
@@ -336,7 +353,11 @@ function buildDescribeFeatureTypeParams(options: {
     params.set("typeName", options.typeName);
   }
 
-  if (isWfs2(version) && options.namespaceUri && options.typeName.includes(":")) {
+  if (
+    isWfs2(version) &&
+    options.namespaceUri &&
+    options.typeName.includes(":")
+  ) {
     const prefix = options.typeName.split(":")[0];
     params.set("namespaces", `xmlns(${prefix},${options.namespaceUri})`);
   }
@@ -401,22 +422,21 @@ function buildGetFeatureParams(options: {
 export async function fetchWfsCapabilities(
   baseUrl: string
 ): Promise<LayerInfo[]> {
-  let lastError: unknown;
+  return tryAcrossVersions(
+    getPreferredCapabilitiesVersions(baseUrl),
+    async (version) => {
+      const capabilitiesUrl = createRequestUrl(
+        baseUrl,
+        buildCapabilitiesParams(version)
+      );
 
-  for (const version of getPreferredCapabilitiesVersions(baseUrl)) {
-    const capabilitiesUrl = createRequestUrl(
-      baseUrl,
-      buildCapabilitiesParams(version)
-    );
+      console.log("Fetching WFS capabilities from:", capabilitiesUrl);
 
-    console.log("Fetching WFS capabilities from:", capabilitiesUrl);
-
-    try {
       const response = await fetchWithCorsProxy(capabilitiesUrl, {
         method: "GET",
         headers: {
-          Accept: "application/xml,text/xml,*/*",
-        },
+          Accept: "application/xml,text/xml,*/*"
+        }
       });
 
       const text = await response.text();
@@ -425,21 +445,15 @@ export async function fetchWfsCapabilities(
         throw new Error(
           `Failed to fetch WFS capabilities: ${response.status} ${response.statusText}\n${text.slice(
             0,
-            500
+            ERROR_BODY_PREVIEW_LENGTH
           )}`
         );
       }
 
       return parseCapabilitiesXml(text);
-    } catch (error) {
-      lastError = error;
-      console.warn(`Capabilities request failed for WFS ${version}`, error);
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Could not fetch WFS capabilities.");
+    },
+    "Capabilities request"
+  );
 }
 
 function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
@@ -467,8 +481,7 @@ function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
   );
 
   const contactOrganization =
-    serviceProviderNode &&
-    firstChildText(serviceProviderNode, "ProviderName");
+    serviceProviderNode && firstChildText(serviceProviderNode, "ProviderName");
 
   const serviceContactNode =
     serviceProviderNode &&
@@ -531,9 +544,7 @@ function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
     );
 
     let defaultProjection = crsNodes
-      .find((el) =>
-        ["DefaultCRS", "DefaultSRS", "SRS"].includes(el.localName)
-      )
+      .find((el) => ["DefaultCRS", "DefaultSRS", "SRS"].includes(el.localName))
       ?.textContent?.trim();
 
     if (defaultProjection) {
@@ -572,7 +583,7 @@ function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
       contactEmail,
       fees: fees || undefined,
       accessConstraints: accessConstraints || undefined,
-      metadataUrl,
+      metadataUrl
     });
   }
 
@@ -661,7 +672,7 @@ function extractBounds(node: Element): LayerInfo["bounds"] | undefined {
         miny: lower[1],
         maxx: upper[0],
         maxy: upper[1],
-        crs: "EPSG:4326",
+        crs: "EPSG:4326"
       };
     }
   }
@@ -680,7 +691,7 @@ function extractBounds(node: Element): LayerInfo["bounds"] | undefined {
         miny,
         maxx,
         maxy,
-        crs: "EPSG:4326",
+        crs: "EPSG:4326"
       };
     }
   }
@@ -707,7 +718,7 @@ function extractBounds(node: Element): LayerInfo["bounds"] | undefined {
         crs:
           boundingBox.getAttribute("crs") ||
           boundingBox.getAttribute("SRS") ||
-          undefined,
+          undefined
       };
     }
   }
@@ -741,35 +752,25 @@ export async function fetchDescribeFeatureType(
   typeName: string,
   layer?: LayerInfo
 ): Promise<SchemaInfo> {
-  const versions = Array.from(
-    new Set(
-      [
-        layer?.serviceVersion,
-        ...getPreferredCapabilitiesVersions(baseUrl),
-      ].filter((value): value is string => Boolean(value))
-    )
-  );
+  return tryAcrossVersions(
+    getEffectiveVersions(baseUrl, layer),
+    async (version) => {
+      const describeUrl = createRequestUrl(
+        baseUrl,
+        buildDescribeFeatureTypeParams({
+          version,
+          typeName,
+          namespaceUri: layer?.namespaceUri
+        })
+      );
 
-  let lastError: unknown;
+      console.log("Fetching DescribeFeatureType from:", describeUrl);
 
-  for (const version of versions) {
-    const describeUrl = createRequestUrl(
-      baseUrl,
-      buildDescribeFeatureTypeParams({
-        version,
-        typeName,
-        namespaceUri: layer?.namespaceUri,
-      })
-    );
-
-    console.log("Fetching DescribeFeatureType from:", describeUrl);
-
-    try {
       const response = await fetchWithCorsProxy(describeUrl, {
         method: "GET",
         headers: {
-          Accept: "application/xml,text/xml,*/*",
-        },
+          Accept: "application/xml,text/xml,*/*"
+        }
       });
 
       const text = await response.text();
@@ -778,24 +779,15 @@ export async function fetchDescribeFeatureType(
         throw new Error(
           `Failed to fetch DescribeFeatureType: ${response.status} ${response.statusText}\n${text.slice(
             0,
-            500
+            ERROR_BODY_PREVIEW_LENGTH
           )}`
         );
       }
 
       return parseDescribeFeatureTypeXml(text);
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `DescribeFeatureType failed for WFS ${version} and type ${typeName}`,
-        error
-      );
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Could not fetch DescribeFeatureType.");
+    },
+    `DescribeFeatureType for type ${typeName}`
+  );
 }
 
 export function parseDescribeFeatureTypeXml(xmlText: string): SchemaInfo {
@@ -837,15 +829,15 @@ export function parseDescribeFeatureTypeXml(xmlText: string): SchemaInfo {
         maxOccursRaw === "unbounded"
           ? "unbounded"
           : maxOccursRaw
-          ? Number(maxOccursRaw)
-          : undefined;
+            ? Number(maxOccursRaw)
+            : undefined;
 
       return {
         name,
         type,
         nillable,
         minOccurs,
-        maxOccurs,
+        maxOccurs
       };
     })
     .filter((field): field is NonNullable<typeof field> => Boolean(field));
@@ -853,7 +845,9 @@ export function parseDescribeFeatureTypeXml(xmlText: string): SchemaInfo {
   return { attributes };
 }
 
-function buildOutputFormatAttempts(layer?: LayerInfo): Array<string | undefined> {
+function buildOutputFormatAttempts(
+  layer?: LayerInfo
+): Array<string | undefined> {
   const advertised = (layer?.outputFormats || [])
     .map((format) => format.trim())
     .filter(Boolean);
@@ -876,7 +870,7 @@ function buildOutputFormatAttempts(layer?: LayerInfo): Array<string | undefined>
     "text/xml; subtype=gml/3.1.1",
     "GML3",
     "GML2",
-    undefined, // Let the server choose its default.
+    undefined // Let the server choose its default.
   ];
 
   const seen = new Set<string>();
@@ -895,17 +889,9 @@ export async function fetchWfsData(
   baseUrl: string,
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
-  layer?: LayerInfo,
-  isDownload?: boolean
+  layer?: LayerInfo
 ) {
-  const versions = Array.from(
-    new Set(
-      [
-        layer?.serviceVersion,
-        ...getPreferredCapabilitiesVersions(baseUrl),
-      ].filter((value): value is string => Boolean(value))
-    )
-  );
+  const versions = getEffectiveVersions(baseUrl, layer);
 
   const sourceProjection =
     layer?.defaultProjection || layer?.projections?.[0] || undefined;
@@ -925,7 +911,7 @@ export async function fetchWfsData(
         outputFormat,
         maxFeatures: effectiveMaxFeatures,
         srsName: sourceProjection,
-        namespaceUri: layer?.namespaceUri,
+        namespaceUri: layer?.namespaceUri
       });
 
       const requestUrl = createRequestUrl(baseUrl, params);
@@ -936,10 +922,11 @@ export async function fetchWfsData(
         const response = await fetchWithCorsProxy(requestUrl, {
           method: "GET",
           headers: {
-            Accept: outputFormat && /json|geojson/i.test(outputFormat)
-              ? "application/json,application/geo+json,text/plain,*/*"
-              : "application/xml,text/xml,*/*",
-          },
+            Accept:
+              outputFormat && /json|geojson/i.test(outputFormat)
+                ? "application/json,application/geo+json,text/plain,*/*"
+                : "application/xml,text/xml,*/*"
+          }
         });
 
         const result = await processWfsResponse(response, outputFormat);
@@ -949,7 +936,7 @@ export async function fetchWfsData(
           sourceProjection,
           outputFormatUsed: outputFormat || "server-default",
           serviceVersionUsed: version,
-          requestUrl,
+          requestUrl
         };
       } catch (error) {
         lastError = error;
@@ -983,7 +970,7 @@ async function processWfsResponse(
     throw new Error(
       `WFS request failed: ${response.status} ${response.statusText}\n${trimmed.slice(
         0,
-        500
+        ERROR_BODY_PREVIEW_LENGTH
       )}`
     );
   }
@@ -1004,7 +991,7 @@ async function processWfsResponse(
 
       return {
         data,
-        attributes: extractGeoJsonAttributes(data),
+        attributes: extractGeoJsonAttributes(data)
       };
     } catch (jsonError) {
       if (trimmed.startsWith("<")) {
@@ -1022,7 +1009,7 @@ async function processWfsResponse(
   throw new Error(
     `Unsupported WFS response format. Content-Type: ${contentType}. First bytes: ${trimmed.slice(
       0,
-      200
+      UNSUPPORTED_FORMAT_PREVIEW_LENGTH
     )}`
   );
 }
@@ -1042,7 +1029,7 @@ function processGmlOrException(xmlText: string): {
 
   return {
     data,
-    attributes: extractGeoJsonAttributes(data),
+    attributes: extractGeoJsonAttributes(data)
   };
 }
 
@@ -1087,12 +1074,9 @@ function gmlToGeoJson(xmlDoc: XMLDocument): GeoJSON.FeatureCollection {
     if (collection) {
       for (const child of Array.from(collection.children)) {
         if (
-          [
-            "boundedBy",
-            "member",
-            "featureMember",
-            "featureMembers",
-          ].includes(child.localName)
+          ["boundedBy", "member", "featureMember", "featureMembers"].includes(
+            child.localName
+          )
         ) {
           continue;
         }
@@ -1105,7 +1089,7 @@ function gmlToGeoJson(xmlDoc: XMLDocument): GeoJSON.FeatureCollection {
 
   return {
     type: "FeatureCollection",
-    features,
+    features
   };
 }
 
@@ -1132,9 +1116,7 @@ function parseGmlFeature(
   }
 
   const id =
-    attr(featureNode, "id") ||
-    attr(featureNode, "fid") ||
-    `feature-${index}`;
+    attr(featureNode, "id") || attr(featureNode, "fid") || `feature-${index}`;
 
   if (!geometry && Object.keys(properties).length === 0) {
     return null;
@@ -1144,7 +1126,7 @@ function parseGmlFeature(
     type: "Feature",
     id,
     geometry,
-    properties,
+    properties
   };
 }
 
@@ -1158,7 +1140,7 @@ const GML_GEOMETRY_NAMES = [
   "Polygon",
   "Surface",
   "MultiPolygon",
-  "MultiSurface",
+  "MultiSurface"
 ];
 
 function containsGeometry(el: Element): boolean {
@@ -1183,7 +1165,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return coords.length > 0
         ? {
             type: "Point",
-            coordinates: coords[0],
+            coordinates: coords[0]
           }
         : null;
     }
@@ -1197,7 +1179,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return points.length > 0
         ? {
             type: "MultiPoint",
-            coordinates: points,
+            coordinates: points
           }
         : null;
     }
@@ -1209,7 +1191,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return coords.length > 0
         ? {
             type: "LineString",
-            coordinates: coords,
+            coordinates: coords
           }
         : null;
     }
@@ -1224,7 +1206,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return lines.length > 0
         ? {
             type: "MultiLineString",
-            coordinates: lines,
+            coordinates: lines
           }
         : null;
     }
@@ -1236,7 +1218,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return rings.length > 0
         ? {
             type: "Polygon",
-            coordinates: rings,
+            coordinates: rings
           }
         : null;
     }
@@ -1251,7 +1233,7 @@ function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
       return polygons.length > 0
         ? {
             type: "MultiPolygon",
-            coordinates: polygons,
+            coordinates: polygons
           }
         : null;
     }
@@ -1373,35 +1355,25 @@ export async function fetchFeatureCount(
   layerId: string,
   layer?: LayerInfo
 ): Promise<number> {
-  const versions = Array.from(
-    new Set(
-      [
-        layer?.serviceVersion,
-        ...getPreferredCapabilitiesVersions(baseUrl),
-      ].filter((value): value is string => Boolean(value))
-    )
-  );
+  return tryAcrossVersions(
+    getEffectiveVersions(baseUrl, layer),
+    async (version) => {
+      const params = buildGetFeatureParams({
+        version,
+        layerId,
+        resultType: "hits",
+        namespaceUri: layer?.namespaceUri
+      });
 
-  let lastError: unknown;
+      const requestUrl = createRequestUrl(baseUrl, params);
 
-  for (const version of versions) {
-    const params = buildGetFeatureParams({
-      version,
-      layerId,
-      resultType: "hits",
-      namespaceUri: layer?.namespaceUri,
-    });
+      console.log("Fetching WFS feature count from:", requestUrl);
 
-    const requestUrl = createRequestUrl(baseUrl, params);
-
-    console.log("Fetching WFS feature count from:", requestUrl);
-
-    try {
       const response = await fetchWithCorsProxy(requestUrl, {
         method: "GET",
         headers: {
-          Accept: "application/xml,text/xml,*/*",
-        },
+          Accept: "application/xml,text/xml,*/*"
+        }
       });
 
       const text = await response.text();
@@ -1410,21 +1382,15 @@ export async function fetchFeatureCount(
         throw new Error(
           `Failed to fetch feature count: ${response.status} ${response.statusText}\n${text.slice(
             0,
-            500
+            ERROR_BODY_PREVIEW_LENGTH
           )}`
         );
       }
 
       return extractFeatureCountFromXml(text);
-    } catch (error) {
-      lastError = error;
-      console.warn(`Feature count failed for WFS ${version}`, error);
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Could not fetch WFS feature count.");
+    },
+    "Feature count request"
+  );
 }
 
 function extractFeatureCountFromXml(xmlText: string): number {
@@ -1458,15 +1424,13 @@ export async function fetchWfsDataForDownload(
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
   layer?: LayerInfo,
-  useNativeProjection = false,
-  isDownload?: boolean
+  useNativeProjection = false
 ): Promise<string> {
   const requestLayer =
-    !useNativeProjection &&
-    layer?.projections?.includes("EPSG:4326")
+    !useNativeProjection && layer?.projections?.includes("EPSG:4326")
       ? {
           ...layer,
-          defaultProjection: "EPSG:4326",
+          defaultProjection: "EPSG:4326"
         }
       : layer;
 
@@ -1474,8 +1438,7 @@ export async function fetchWfsDataForDownload(
     baseUrl,
     layerId,
     maxFeatures,
-    requestLayer,
-    isDownload
+    requestLayer
   );
 
   return JSON.stringify(data, null, 2);

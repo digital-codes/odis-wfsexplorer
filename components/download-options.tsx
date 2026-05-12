@@ -74,8 +74,7 @@ export function DownloadOptions({
         layer.id,
         effectiveMaxFeatures,
         layer,
-        useNativeProjection,
-        true
+        useNativeProjection
       );
 
       const dataParsed = JSON.parse(data);
