@@ -345,6 +345,7 @@ export default function WfsAnalyzer() {
     }
 
     const rawDatasets = res as Array<{
+      id?: unknown;
       name?: unknown;
       url?: unknown;
       typ?: unknown;
@@ -357,6 +358,7 @@ export default function WfsAnalyzer() {
 
     const datasets = rawDatasets
       .map((d) => {
+        const id = typeof d.id === "string" ? d.id : "";
         const name = typeof d.name === "string" ? d.name : "";
         const url = typeof d.url === "string" ? d.url : "";
         const typ = typeof d.typ === "string" ? d.typ.toLowerCase() : undefined;
@@ -374,8 +376,10 @@ export default function WfsAnalyzer() {
             ? [d.layers]
             : undefined;
 
-        if (!name && !url && !mdId) return null;
-        if (typ && typ !== "wfs" && typ !== "wms") return null;
+        // Must have typ = wfs or wms
+        if (!typ || (typ !== "wfs" && typ !== "wms")) return null;
+        // Must have id and url
+        if (!id || !url) return null;
 
         return {
           name: name || mdId || url || "Unnamed dataset",
@@ -423,6 +427,7 @@ export default function WfsAnalyzer() {
               err instanceof Error
                 ? err.message
                 : "Unable to load datasets file.";
+            console.error("Failed to load datasets:", message);
             setDatasetsError(message);
             setSearchDatasets([]);
           })
