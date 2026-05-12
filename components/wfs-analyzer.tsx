@@ -380,6 +380,8 @@ export default function WfsAnalyzer() {
         if (!typ || (typ !== "wfs" && typ !== "wms")) return null;
         // Must have id and url
         if (!id || !url) return null;
+        // WMS entries must have CSW metadata to resolve WFS alternative
+        if (typ === "wms" && (!mdId || !cswUrl)) return null;
 
         return {
           name: name || mdId || url || "Unnamed dataset",
