@@ -4,6 +4,7 @@ export type TranslationKey =
   | "appSubtitle"
   | "wfsUrlLabel"
   | "wfsUrlPlaceholder"
+  | "wfsUrlPlaceholderSearch"
   | "analyzeButton"
   | "discoveringLayers"
   | "wfsDescription"
@@ -262,7 +263,11 @@ export type TranslationKey =
   | "contact"
   | "imprint"
   | "previous"
-  | "next";
+  | "next"
+  | "onlyWMSavailable"
+  | "noMatchSearch"
+  | "loadingDatasets"
+  | "noWFSAvailable";
 
 // English translations
 export const enTranslations: Record<TranslationKey, string> = {
@@ -270,6 +275,8 @@ export const enTranslations: Record<TranslationKey, string> = {
   appSubtitle: "Web Feature Service Data Analysis Tool",
   wfsUrlLabel: "WFS URL",
   wfsUrlPlaceholder: "Enter WFS URL",
+  wfsUrlPlaceholderSearch: "Search or Enter WFS URL",
+  noMatchSearch: "No datasets match your search.",
   analyzeButton: "Load",
   discoveringLayers: "Discovering Layers...",
   wfsDescription: "Enter a valid WFS URL to analyze its layers and data",
@@ -552,6 +559,9 @@ export const enTranslations: Record<TranslationKey, string> = {
   imprint: "Imprint",
   previous: "Previous",
   next: "Next",
+  onlyWMSavailable: "only available as WMS: ",
+  loadingDatasets: "loading external Datasets",
+  noWFSAvailable: "no WFS available"
 };
 
 // German translations
@@ -560,6 +570,9 @@ export const deTranslations: Record<TranslationKey, string> = {
   appSubtitle: "Web Feature Service Datenanalyse-Tool",
   wfsUrlLabel: "WFS URL",
   wfsUrlPlaceholder: "WFS-URL hier einfügen …",
+  wfsUrlPlaceholderSearch: "WFS-URL hier einfügen oder suchen",
+  noMatchSearch:
+    "Es wurden keine Datensätze gefunden, die Ihrer Suche entsprechen.",
   analyzeButton: "Laden",
   discoveringLayers: "Entdecke Layer...",
   wfsDescription:
@@ -854,4 +867,7 @@ export const deTranslations: Record<TranslationKey, string> = {
   imprint: "Impressum",
   previous: "Zurück",
   next: "Nächstes",
+  onlyWMSavailable: "nur als WMS verfügbar: ",
+  loadingDatasets: "externe Daten werden geladen",
+  noWFSAvailable: "kein WFS verfügbar"
 };

@@ -34,6 +34,26 @@ With the WFS Explorer, users can interactively explore individual WFS datasets. 
 
 - Direct URL Access: The WFS Explorer supports loading datasets via URL parameters. When a specific WFS URL is passed to the tool, the corresponding dataset is automatically loaded—ideal for embedding into other websites or workflows.
 
+## URL Parameters
+
+The WFS Explorer can be preconfigured via URL parameters. This makes it easy to open a specific dataset directly, apply predefined filters, or provide a list of datasets for search and selection. When a WFS dataset is loaded and filters are applied in the interface, the corresponding URL parameters are set automatically.
+
+### Parameters
+
+- `wfs`  
+  The URL of the WFS service that should be loaded automatically.
+
+- `filters`  
+  A URL-encoded JSON array of filter objects that should be applied when the dataset is loaded.  
+  Each filter object contains:
+  - `attribute`: the field name
+  - `operator`: the comparison operator
+  - `value`: the filter value
+
+- `datasets`  
+  The URL to a `services-internet.json` file, as used by the [Masterportal](https://bitbucket.org/geowerkstatt-hamburg/masterportal/src) software. All datasets listed in this JSON file are added to the search. If an entry is a WMS, the application also checks whether a corresponding WFS is available. Example which loads the services from Berlins Masterportal:
+  - https://wfsexplorer.odis-berlin.de/?datasets=https://gdi.berlin.de/viewer/_shared/resources/services-internet.json
+
 ### About Web Feature Service (WFS)
 
 The WFS Explorer is built on the Web Feature Service (WFS) standard, defined by the Open Geospatial Consortium (OGC). WFS provides geospatial data in a structured, machine-readable format—including both geometry (e.g., points, lines, polygons) and corresponding attribute data. What makes this format particularly powerful is its standardized API: regardless of the data provider, WFS endpoints follow a consistent protocol and can thus be queried in a uniform way.
@@ -142,6 +162,4 @@ Texts and content available as [CC BY](https://creativecommons.org/licenses/by/3
 
 ## Related Projects
 
-```
-
-```
+[GeoExplorer](https://geoexplorer.odis-berlin.de/)
