@@ -162,7 +162,7 @@ Texts and content available as [CC BY](https://creativecommons.org/licenses/by/3
 
 ## Related Projects
 
-[GeoExplorer[(https://geoexplorer.odis-berlin.de/)
+[GeoExplorer](https://geoexplorer.odis-berlin.de/)
 
 ```
 
