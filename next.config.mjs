@@ -1,33 +1,32 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
   eslint: {
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: true
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: true
   },
   images: {
-    domains: ['localhost'],
+    domains: ["localhost"],
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: '**',
-      },
+        protocol: "https",
+        hostname: "**"
+      }
     ],
-    unoptimized: true,
+    unoptimized: true
   },
   webpack: (config) => {
     // Handle node modules that need special treatment
     config.resolve.fallback = {
       ...config.resolve.fallback,
       fs: false,
-      path: false,
+      path: false
     };
-    
+
     return config;
-  },
+  }
 };
 
 export default nextConfig;

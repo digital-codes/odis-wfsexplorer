@@ -1,14 +1,23 @@
 // Default maximum number of features to fetch
 const DEFAULT_MAX_FEATURES = 500;
+const WFS_PROXY_PATH = "/api/wfs-proxy";
 
-// Update the LayerInfo interface to include outputFormats
+// Maximum length of error response body to include in error messages
+const ERROR_BODY_PREVIEW_LENGTH = 500;
+const UNSUPPORTED_FORMAT_PREVIEW_LENGTH = 200;
+
+// Supported WFS versions, ordered by preference
+const SUPPORTED_WFS_VERSIONS = ["2.0.0", "1.1.0", "1.0.0"] as const;
+
 export interface LayerInfo {
   id: string;
   title: string;
   abstract?: string;
   projections: string[];
   defaultProjection?: string;
-  outputFormats?: string[]; // Add this field to store supported output formats
+  outputFormats?: string[];
+  serviceVersion?: string;
+  namespaceUri?: string;
   bounds?: {
     minx: number;
     miny: number;
@@ -25,676 +34,7 @@ export interface LayerInfo {
   metadataUrl?: string;
 }
 
-// Update the fetchWfsCapabilities function to better handle URL parameters and add more robust error handling
-export async function fetchWfsCapabilities(
-  baseUrl: string
-): Promise<LayerInfo[]> {
-  try {
-    // Clean up the URL to ensure we're working with the base URL
-    let url: URL;
-    try {
-      url = new URL(baseUrl);
-    } catch (e) {
-      throw new Error(
-        `Invalid URL format: ${baseUrl}. Please check the URL and try again.`
-      );
-    }
-
-    // Create a capabilities URL - preserve any authentication or other relevant query params
-    const originalParams = new URLSearchParams(url.search);
-    const searchParams = new URLSearchParams();
-
-    // Copy over any authentication params that might be needed
-    for (const [key, value] of originalParams.entries()) {
-      if (!["service", "version", "request"].includes(key.toLowerCase())) {
-        searchParams.set(key, value);
-      }
-    }
-
-    // Set WFS parameters - use lowercase for better compatibility with some servers
-    searchParams.set("service", "WFS");
-    searchParams.set("version", "2.0.0");
-    searchParams.set("request", "GetCapabilities");
-
-    const capabilitiesUrl = `${url.origin}${
-      url.pathname
-    }?${searchParams.toString()}`;
-
-    console.log("Fetching capabilities from:", capabilitiesUrl);
-
-    // Try with fetch first
-    try {
-      const response = await fetch(capabilitiesUrl, {
-        method: "GET",
-        headers: {
-          Accept: "text/xml,application/xml",
-        },
-      });
-
-      if (!response.ok) {
-        const statusCode = response.status;
-        let errorMessage = `Failed to fetch WFS capabilities: ${statusCode} ${response.statusText}`;
-
-        // Add more specific error messages for common status codes
-        if (statusCode === 400) {
-          errorMessage = `Bad Request (400): The WFS server rejected the request. This URL may not be a valid WFS endpoint or the server doesn't support the WFS protocol.`;
-        } else if (statusCode === 401 || statusCode === 403) {
-          errorMessage = `Authentication Error (${statusCode}): This WFS service requires authentication.`;
-        } else if (statusCode === 404) {
-          errorMessage = `Not Found (404): The WFS service was not found at this URL. Please check the URL and try again.`;
-        } else if (statusCode === 500) {
-          errorMessage = `Server Error (500): The WFS server encountered an internal error.`;
-        }
-
-        throw new Error(errorMessage);
-      }
-
-      const text = await response.text();
-      return parseCapabilitiesXml(text);
-    } catch (fetchError) {
-      console.error("Error with primary fetch method:", fetchError);
-
-      // If the error is already a formatted error message, rethrow it
-      if (
-        fetchError instanceof Error &&
-        (fetchError.message.includes("Bad Request") ||
-          fetchError.message.includes("Authentication Error") ||
-          fetchError.message.includes("Not Found") ||
-          fetchError.message.includes("Server Error"))
-      ) {
-        throw fetchError;
-      }
-
-      // Try alternative URL format (some servers are picky about parameter case)
-      const altUrl = `${url.origin}${url.pathname}?service=wfs&version=2.0.0&request=GetCapabilities`;
-      console.log("Trying alternative URL format:", altUrl);
-
-      try {
-        const altResponse = await fetch(altUrl, {
-          method: "GET",
-          headers: {
-            Accept: "text/xml,application/xml",
-          },
-        });
-
-        if (!altResponse.ok) {
-          // Try with version 1.0.0 as a last resort
-          const legacyUrl = `${url.origin}${url.pathname}?service=wfs&version=1.0.0&request=GetCapabilities`;
-          console.log("Trying legacy URL format:", legacyUrl);
-
-          try {
-            const legacyResponse = await fetch(legacyUrl, {
-              method: "GET",
-              headers: {
-                Accept: "text/xml,application/xml",
-              },
-            });
-
-            if (!legacyResponse.ok) {
-              // If all attempts fail, throw a comprehensive error
-              throw new Error(
-                `WFS Service Error: Could not connect to a valid WFS service at this URL. The server returned ${legacyResponse.status} ${legacyResponse.statusText}. Please verify this is a valid WFS endpoint.`
-              );
-            }
-
-            const legacyText = await legacyResponse.text();
-            return parseCapabilitiesXml(legacyText);
-          } catch (legacyError) {
-            // If the legacy attempt fails with a network error, throw a more specific error
-            if (
-              legacyError instanceof TypeError &&
-              legacyError.message.includes("Failed to fetch")
-            ) {
-              throw new Error(
-                `Network Error: Could not connect to the WFS service. Please check your internet connection and the server availability.`
-              );
-            }
-            throw legacyError;
-          }
-        }
-
-        const altText = await altResponse.text();
-        return parseCapabilitiesXml(altText);
-      } catch (altError) {
-        // If the alternative attempt fails with a network error, throw a more specific error
-        if (
-          altError instanceof TypeError &&
-          altError.message.includes("Failed to fetch")
-        ) {
-          throw new Error(
-            `Network Error: Could not connect to the WFS service. Please check your internet connection and the server availability.`
-          );
-        }
-        throw altError;
-      }
-    }
-  } catch (error) {
-    console.error("Error fetching WFS capabilities:", error);
-
-    // Create more descriptive error messages based on the error type
-    if (
-      error instanceof TypeError &&
-      error.message.includes("Failed to fetch")
-    ) {
-      throw new Error(
-        `Network Error: Failed to connect to the WFS service. Please check your internet connection and the server availability.`
-      );
-    }
-
-    if (error instanceof Error) {
-      // If the error is already well-formatted, just rethrow it
-      if (
-        error.message.includes("Bad Request") ||
-        error.message.includes("Authentication Error") ||
-        error.message.includes("Not Found") ||
-        error.message.includes("Server Error") ||
-        error.message.includes("Network Error") ||
-        error.message.includes("WFS Service Error")
-      ) {
-        throw error;
-      }
-    }
-
-    // For any other errors, try to create a minimal layer info from the URL as a last resort
-    try {
-      const url = new URL(baseUrl);
-      const pathParts = url.pathname.split("/");
-      const lastPart = pathParts[pathParts.length - 1];
-
-      // Check if this looks like a WFS URL before returning a minimal layer
-      if (
-        url.pathname.toLowerCase().includes("wfs") ||
-        url.search.toLowerCase().includes("wfs") ||
-        lastPart.toLowerCase().includes("wfs")
-      ) {
-        console.log(
-          "URL appears to be WFS-related, attempting to create minimal layer info"
-        );
-        // Return a minimal layer info based on the URL
-        return [
-          {
-            id: lastPart,
-            title: lastPart,
-            projections: ["EPSG:4326"],
-            defaultProjection: "EPSG:4326",
-          },
-        ];
-      } else {
-        // If it doesn't look like a WFS URL, throw a more specific error
-        throw new Error(
-          `Invalid WFS URL: The URL does not appear to point to a WFS service. Please check the URL and try again.`
-        );
-      }
-    } catch (e) {
-      // If all else fails, throw the original error with a clearer message
-      if (error instanceof Error) {
-        throw new Error(`WFS Service Error: ${error.message}`);
-      } else {
-        throw new Error(`Unknown error fetching WFS capabilities`);
-      }
-    }
-  }
-}
-
-// Update the parseCapabilitiesXml function to extract output formats
-function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-
-  // Check for parsing errors
-  const parserError = xmlDoc.querySelector("parsererror");
-  if (parserError) {
-    throw new Error(
-      "Failed to parse WFS capabilities XML. The response from the server is not valid XML."
-    );
-  }
-
-  // Extract feature type nodes
-  let featureTypeNodes = xmlDoc.querySelectorAll("FeatureType");
-
-  if (featureTypeNodes.length === 0) {
-    featureTypeNodes = xmlDoc.querySelectorAll("wfs\\:FeatureType");
-  }
-
-  if (featureTypeNodes.length === 0) {
-    // Try with namespace wildcard
-    featureTypeNodes = xmlDoc.querySelectorAll("*|FeatureType");
-  }
-
-  // Last resort - try to find any element with a Name child that might be a feature type
-  if (featureTypeNodes.length === 0) {
-    const nameNodes = xmlDoc.querySelectorAll("Name, wfs\\:Name, *|Name");
-    // Filter to only those that might be feature type names
-    const potentialLayers: LayerInfo[] = [];
-    nameNodes.forEach((node) => {
-      if (
-        node.textContent &&
-        node.parentElement &&
-        ![
-          "WFS_Capabilities",
-          "ServiceIdentification",
-          "ServiceProvider",
-        ].includes(node.parentElement.nodeName)
-      ) {
-        potentialLayers.push({
-          id: node.textContent.trim(),
-          title: node.textContent.trim(),
-          projections: ["EPSG:4326"], // Default assumption
-          outputFormats: [
-            "application/json",
-            "application/gml+xml",
-            "text/xml",
-            "GML2",
-            "GML3",
-          ], // Default formats
-        });
-      }
-    });
-
-    if (potentialLayers.length > 0) {
-      return potentialLayers;
-    }
-
-    // Check if this is a WFS response but doesn't have feature types
-    const wfsCapabilities = xmlDoc.querySelector(
-      "WFS_Capabilities, wfs\\:WFS_Capabilities, *|WFS_Capabilities"
-    );
-    if (wfsCapabilities) {
-      throw new Error(
-        "This appears to be a valid WFS service, but no feature types (layers) were found."
-      );
-    }
-
-    throw new Error(
-      "No feature types found in WFS capabilities. This may not be a valid WFS service."
-    );
-  }
-
-  // Try to extract service metadata
-  let contactPerson = "";
-  let contactOrganization = "";
-  let contactEmail = "";
-  let fees = "";
-  let accessConstraints = "";
-
-  // Extract service provider information
-  const serviceProviderNode = xmlDoc.querySelector(
-    "ServiceProvider, wfs\\:ServiceProvider, *|ServiceProvider"
-  );
-  if (serviceProviderNode) {
-    const providerNameNode = serviceProviderNode.querySelector(
-      "ProviderName, wfs\\:ProviderName, *|ProviderName"
-    );
-    if (providerNameNode && providerNameNode.textContent) {
-      contactOrganization = providerNameNode.textContent.trim();
-    }
-
-    const contactInfoNode = serviceProviderNode.querySelector(
-      "ServiceContact, wfs\\:ServiceContact, *|ServiceContact"
-    );
-    if (contactInfoNode) {
-      const individualNameNode = contactInfoNode.querySelector(
-        "IndividualName, wfs\\:IndividualName, *|IndividualName"
-      );
-      if (individualNameNode && individualNameNode.textContent) {
-        contactPerson = individualNameNode.textContent.trim();
-      }
-
-      const contactInfoDetails = contactInfoNode.querySelector(
-        "ContactInfo, wfs\\:ContactInfo, *|ContactInfo"
-      );
-      if (contactInfoDetails) {
-        const addressNode = contactInfoDetails.querySelector(
-          "Address, wfs\\:Address, *|Address"
-        );
-        if (addressNode) {
-          const emailNode = addressNode.querySelector(
-            "ElectronicMailAddress, wfs\\:ElectronicMailAddress, *|ElectronicMailAddress"
-          );
-          if (emailNode && emailNode.textContent) {
-            contactEmail = emailNode.textContent.trim();
-          }
-        }
-      }
-    }
-  }
-
-  // Extract service metadata
-  const serviceIdentificationNode = xmlDoc.querySelector(
-    "ServiceIdentification, wfs\\:ServiceIdentification, *|ServiceIdentification"
-  );
-  if (serviceIdentificationNode) {
-    const feesNode = serviceIdentificationNode.querySelector(
-      "Fees, wfs\\:Fees, *|Fees"
-    );
-    if (feesNode && feesNode.textContent) {
-      fees = feesNode.textContent.trim();
-    }
-
-    const accessConstraintsNode = serviceIdentificationNode.querySelector(
-      "AccessConstraints, wfs\\:AccessConstraints, *|AccessConstraints"
-    );
-    if (accessConstraintsNode && accessConstraintsNode.textContent) {
-      accessConstraints = accessConstraintsNode.textContent.trim();
-    }
-  }
-
-  // Extract supported output formats
-  let globalOutputFormats: string[] = [];
-  const operationsMetadataNode = xmlDoc.querySelector(
-    "OperationsMetadata, wfs\\:OperationsMetadata, *|OperationsMetadata"
-  );
-  if (operationsMetadataNode) {
-    const getFeatureNode = operationsMetadataNode.querySelector(
-      "Operation[name='GetFeature'], wfs\\:Operation[name='GetFeature'], *|Operation[name='GetFeature']"
-    );
-    if (getFeatureNode) {
-      const parameterNodes = getFeatureNode.querySelectorAll(
-        "Parameter[name='outputFormat'], wfs\\:Parameter[name='outputFormat'], *|Parameter[name='outputFormat']"
-      );
-      parameterNodes.forEach((paramNode) => {
-        const allowedValues = paramNode.querySelectorAll(
-          "AllowedValues > Value, wfs\\:AllowedValues > wfs\\:Value, *|AllowedValues > *|Value"
-        );
-        allowedValues.forEach((valueNode) => {
-          if (valueNode.textContent) {
-            globalOutputFormats.push(valueNode.textContent.trim());
-          }
-        });
-      });
-    }
-  }
-
-  // If no global output formats found, try WFS 1.0.0 style
-  if (globalOutputFormats.length === 0) {
-    const capabilityNode = xmlDoc.querySelector(
-      "Capability, wfs\\:Capability, *|Capability"
-    );
-    if (capabilityNode) {
-      const requestNode = capabilityNode.querySelector(
-        "Request, wfs\\:Request, *|Request"
-      );
-      if (requestNode) {
-        const getFeatureNode = requestNode.querySelector(
-          "GetFeature, wfs\\:GetFeature, *|GetFeature"
-        );
-        if (getFeatureNode) {
-          const formatNodes = getFeatureNode.querySelectorAll(
-            "Format, wfs\\:Format, *|Format"
-          );
-          formatNodes.forEach((formatNode) => {
-            if (formatNode.textContent) {
-              globalOutputFormats.push(formatNode.textContent.trim());
-            }
-          });
-        }
-      }
-    }
-  }
-
-  // If still no output formats found, use defaults
-  if (globalOutputFormats.length === 0) {
-    globalOutputFormats = [
-      "application/json",
-      "application/gml+xml",
-      "text/xml",
-      "GML2",
-      "GML3",
-    ];
-  }
-
-  const layers: LayerInfo[] = [];
-
-  featureTypeNodes.forEach((node) => {
-    // Extract layer ID (name)
-    const nameNode =
-      node.querySelector("Name") ||
-      node.querySelector("wfs\\:Name") ||
-      node.querySelector("*|Name");
-    if (!nameNode || !nameNode.textContent) return;
-
-    const layerId = nameNode.textContent.trim();
-
-    // Extract layer title
-    const titleNode =
-      node.querySelector("Title") ||
-      node.querySelector("wfs\\:Title") ||
-      node.querySelector("*|Title");
-    const layerTitle = titleNode?.textContent?.trim() || layerId;
-
-    // Extract layer abstract
-    const abstractNode =
-      node.querySelector("Abstract") ||
-      node.querySelector("wfs\\:Abstract") ||
-      node.querySelector("*|Abstract");
-    const layerAbstract = abstractNode?.textContent?.trim();
-
-    // Extract keywords
-    const keywordsNode =
-      node.querySelector("Keywords") ||
-      node.querySelector("wfs\\:Keywords") ||
-      node.querySelector("*|Keywords");
-    let keywords: string[] = [];
-    if (keywordsNode && keywordsNode.textContent) {
-      // Keywords might be comma-separated or in individual Keyword elements
-      const keywordText = keywordsNode.textContent.trim();
-      if (keywordText) {
-        keywords = keywordText
-          .split(/,|\n/)
-          .map((k) => k.trim())
-          .filter((k) => k);
-      }
-    }
-
-    // Try to find individual keyword elements
-    const keywordNodes = node.querySelectorAll(
-      "Keyword, wfs\\:Keyword, *|Keyword"
-    );
-    if (keywordNodes.length > 0) {
-      keywords = Array.from(keywordNodes)
-        .map((node) => node.textContent?.trim() || "")
-        .filter((k) => k);
-    }
-
-    // Extract metadata URL if available
-    let metadataUrl = "";
-    const metadataUrlNode = node.querySelector(
-      "MetadataURL, wfs\\:MetadataURL, *|MetadataURL"
-    );
-    if (metadataUrlNode) {
-      const urlNode = metadataUrlNode.querySelector(
-        "OnlineResource, wfs\\:OnlineResource, *|OnlineResource"
-      );
-      if (urlNode && urlNode.getAttribute("xlink:href")) {
-        metadataUrl = urlNode.getAttribute("xlink:href") || "";
-      }
-    }
-
-    // Extract supported CRS/SRS
-    const crsNodes = node.querySelectorAll(
-      "DefaultCRS, OtherCRS, DefaultSRS, OtherSRS, wfs\\:DefaultCRS, wfs\\:OtherCRS, wfs\\:DefaultSRS, wfs\\:OtherSRS, *|DefaultCRS, *|OtherCRS, *|DefaultSRS, *|OtherSRS"
-    );
-
-    const projections: string[] = [];
-    let defaultProjection: string | undefined;
-
-    crsNodes.forEach((crsNode) => {
-      if (crsNode.textContent) {
-        const crs = crsNode.textContent.trim();
-
-        // Convert URN format to EPSG:xxxx format if needed
-        let formattedCrs = crs;
-        if (crs.startsWith("urn:ogc:def:crs:EPSG:")) {
-          // Handle URN format with version number: urn:ogc:def:crs:EPSG:6.9:25833
-          const parts = crs.split(":");
-          const epsgCode = parts[parts.length - 1];
-          formattedCrs = `EPSG:${epsgCode}`;
-        } else if (crs.startsWith("http://www.opengis.net/gml/srs/epsg.xml#")) {
-          formattedCrs = `EPSG:${crs.split("#").pop()}`;
-        } else if (crs.startsWith("http://www.opengis.net/def/crs/EPSG/")) {
-          const parts = crs.split("/");
-          const epsgCode = parts[parts.length - 1];
-          formattedCrs = `EPSG:${epsgCode}`;
-        }
-
-        projections.push(formattedCrs);
-
-        // Set default projection if this is the DefaultCRS/DefaultSRS
-        if (
-          crsNode.nodeName.includes("DefaultCRS") ||
-          crsNode.nodeName.includes("DefaultSRS")
-        ) {
-          defaultProjection = formattedCrs;
-        }
-      }
-    });
-
-    // If no projections found, assume EPSG:4326 (WGS 84)
-    if (projections.length === 0) {
-      projections.push("EPSG:4326");
-    }
-
-    // Always add EPSG:4326 if it's not already in the list
-    if (!projections.includes("EPSG:4326")) {
-      projections.push("EPSG:4326");
-    }
-
-    // If no default projection set, use the first one in the list
-    if (!defaultProjection && projections.length > 0) {
-      defaultProjection = projections[0];
-    }
-
-    // Extract bounding box if available
-    const bboxNode = node.querySelector(
-      "WGS84BoundingBox, wfs\\:WGS84BoundingBox, *|WGS84BoundingBox, BoundingBox, wfs\\:BoundingBox, *|BoundingBox"
-    );
-
-    let bounds: LayerInfo["bounds"] | undefined;
-
-    if (bboxNode) {
-      const lowerCornerNode = bboxNode.querySelector(
-        "LowerCorner, wfs\\:LowerCorner, *|LowerCorner"
-      );
-      const upperCornerNode = bboxNode.querySelector(
-        "UpperCorner, wfs\\:UpperCorner, *|UpperCorner"
-      );
-
-      if (lowerCornerNode?.textContent && upperCornerNode?.textContent) {
-        const lowerCorner = lowerCornerNode.textContent
-          .trim()
-          .split(" ")
-          .map(Number);
-        const upperCorner = upperCornerNode.textContent
-          .trim()
-          .split(" ")
-          .map(Number);
-
-        if (lowerCorner.length >= 2 && upperCorner.length >= 2) {
-          bounds = {
-            minx: lowerCorner[0],
-            miny: lowerCorner[1],
-            maxx: upperCorner[0],
-            maxy: upperCorner[1],
-            crs: bboxNode.nodeName.includes("WGS84") ? "EPSG:4326" : undefined,
-          };
-        }
-      }
-    }
-
-    // Extract feature-specific output formats if available
-    let outputFormats = [...globalOutputFormats];
-    const formatNodes = node.querySelectorAll(
-      "OutputFormats > Format, wfs\\:OutputFormats > wfs\\:Format, *|OutputFormats > *|Format"
-    );
-    if (formatNodes.length > 0) {
-      // If feature type has specific formats, use those instead
-      outputFormats = [];
-      formatNodes.forEach((formatNode) => {
-        if (formatNode.textContent) {
-          outputFormats.push(formatNode.textContent.trim());
-        }
-      });
-    }
-
-    layers.push({
-      id: layerId,
-      title: layerTitle,
-      abstract: layerAbstract,
-      projections,
-      defaultProjection,
-      outputFormats,
-      bounds,
-      keywords,
-      contactPerson,
-      contactOrganization,
-      contactEmail,
-      fees,
-      accessConstraints,
-      metadataUrl,
-    });
-  });
-
-  return layers;
-}
-
-export async function fetchDescribeFeatureType(
-  baseUrl: string,
-  typeName: string
-): Promise<{ name: string; type: string }[]> {
-  let cleanUrl = baseUrl.trim();
-  const urlObj = new URL(cleanUrl);
-  cleanUrl = `${urlObj.origin}${urlObj.pathname}`;
-
-  try {
-    const url = new URL(cleanUrl);
-    const originalParams = new URLSearchParams(url.search);
-    const searchParams = new URLSearchParams();
-
-    // Preserve important query parameters (e.g., tokens)
-    for (const [key, value] of originalParams.entries()) {
-      if (
-        !["service", "version", "request", "typeName"].includes(
-          key.toLowerCase()
-        )
-      ) {
-        searchParams.set(key, value);
-      }
-    }
-
-    // Set required WFS DescribeFeatureType parameters
-    searchParams.set("service", "WFS");
-    searchParams.set("version", "2.0.0");
-    searchParams.set("request", "DescribeFeatureType");
-    searchParams.set("typeName", typeName);
-
-    const describeUrl = `${url.origin}${
-      url.pathname
-    }?${searchParams.toString()}`;
-    console.log("Fetching DescribeFeatureType from:", describeUrl);
-
-    const response = await fetch(describeUrl, {
-      method: "GET",
-      headers: {
-        Accept: "application/xml,text/xml",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch DescribeFeatureType: ${response.status} ${response.statusText}`
-      );
-    }
-
-    const xmlText = await response.text();
-
-    return parseDescribeFeatureTypeXml(xmlText);
-  } catch (error) {
-    console.error("Error fetching DescribeFeatureType:", error);
-    throw error instanceof Error ? error : new Error("Unknown error");
-  }
-}
-
-type SchemaInfo = {
+export type SchemaInfo = {
   attributes: {
     name: string;
     type: string;
@@ -704,938 +44,1404 @@ type SchemaInfo = {
   }[];
 };
 
-export function parseDescribeFeatureTypeXml(xmlText: string): SchemaInfo {
+function getHeaderValue(
+  headers: HeadersInit | undefined,
+  name: string
+): string | null {
+  if (!headers) return null;
+
+  if (headers instanceof Headers) {
+    return headers.get(name);
+  }
+
+  if (Array.isArray(headers)) {
+    const entry = headers.find(
+      ([key]) => key.toLowerCase() === name.toLowerCase()
+    );
+    return entry?.[1] ?? null;
+  }
+
+  const record = headers as Record<string, string | undefined>;
+
+  const direct = record[name];
+  if (direct) return direct;
+
+  const matchedKey = Object.keys(record).find(
+    (key) => key.toLowerCase() === name.toLowerCase()
+  );
+
+  return matchedKey ? (record[matchedKey] ?? null) : null;
+}
+
+function isLikelyCorsError(error: unknown): boolean {
+  return (
+    error instanceof TypeError &&
+    (error.message.includes("Failed to fetch") ||
+      error.message.includes("Load failed") ||
+      error.message.includes("NetworkError"))
+  );
+}
+
+async function fetchWithCorsProxy(
+  url: string,
+  init?: RequestInit
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (typeof window === "undefined" || !isLikelyCorsError(error)) {
+      throw error;
+    }
+
+    const proxyUrl = new URL(WFS_PROXY_PATH, window.location.origin);
+    proxyUrl.searchParams.set("url", url);
+
+    const accept = getHeaderValue(init?.headers, "Accept");
+    if (accept) {
+      proxyUrl.searchParams.set("accept", accept);
+    }
+
+    console.warn(
+      "Direct WFS request failed due to likely CORS/network restrictions. Retrying through proxy.",
+      url
+    );
+
+    return fetch(proxyUrl.toString(), {
+      method: "GET",
+      cache: "no-store"
+    });
+  }
+}
+
+function parseXmlOrThrow(xmlText: string, label = "XML"): XMLDocument {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlText, "application/xml");
 
-  const schemaEl = xmlDoc.querySelector("schema, xsd\\:schema, *|schema");
-  if (!schemaEl) {
+  const parserError = Array.from(xmlDoc.getElementsByTagName("*")).find(
+    (el) => el.localName === "parsererror"
+  );
+
+  if (parserError) {
     throw new Error(
-      "Invalid DescribeFeatureType response: No <schema> element found."
+      `Failed to parse ${label}: ${parserError.textContent?.trim()}`
     );
   }
 
-  const elements = Array.from(
-    schemaEl.querySelectorAll("element, xsd\\:element, *|element")
+  return xmlDoc;
+}
+
+function allByLocalName(root: ParentNode, localName: string): Element[] {
+  // Use getElementsByTagNameNS for better performance than filtering all descendants.
+  // Works on both Document and Element nodes.
+  if (
+    typeof (root as Element).getElementsByTagNameNS === "function" ||
+    typeof (root as XMLDocument).getElementsByTagNameNS === "function"
+  ) {
+    const collection = (
+      root as Element | XMLDocument
+    ).getElementsByTagNameNS("*", localName);
+    return Array.from(collection);
+  }
+
+  return Array.from(root.querySelectorAll("*")).filter(
+    (el) => el.localName === localName
   );
+}
+
+function allByLocalNames(root: ParentNode, localNames: string[]): Element[] {
+  const wanted = new Set(localNames);
+
+  return Array.from(root.querySelectorAll("*")).filter((el) =>
+    wanted.has(el.localName)
+  );
+}
+
+function elementsIncludingRoot(root: ParentNode, localName: string): Element[] {
+  const result: Element[] = [];
+
+  if (root instanceof Element && root.localName === localName) {
+    result.push(root);
+  }
+
+  result.push(...allByLocalName(root, localName));
+  return result;
+}
+
+function firstByLocalName(
+  root: ParentNode,
+  localName: string
+): Element | undefined {
+  return allByLocalName(root, localName)[0];
+}
+
+function childrenByLocalName(parent: Element, localName: string): Element[] {
+  return Array.from(parent.children).filter((el) => el.localName === localName);
+}
+
+function firstChildByLocalName(
+  parent: Element,
+  localName: string
+): Element | undefined {
+  return childrenByLocalName(parent, localName)[0];
+}
+
+function firstChildText(
+  parent: Element,
+  localName: string
+): string | undefined {
+  return firstChildByLocalName(parent, localName)?.textContent?.trim();
+}
+
+function attr(el: Element, localName: string): string | null {
+  for (const attribute of Array.from(el.attributes)) {
+    if (attribute.localName === localName || attribute.name === localName) {
+      return attribute.value;
+    }
+  }
+
+  return null;
+}
+
+function normalizeCrs(crs: string): string {
+  if (crs.startsWith("urn:ogc:def:crs:EPSG:")) {
+    return `EPSG:${crs.split(":").pop()}`;
+  }
+
+  if (crs.startsWith("http://www.opengis.net/def/crs/EPSG/")) {
+    return `EPSG:${crs.split("/").pop()}`;
+  }
+
+  if (crs.startsWith("http://www.opengis.net/gml/srs/epsg.xml#")) {
+    return `EPSG:${crs.split("#").pop()}`;
+  }
+
+  return crs;
+}
+
+function getNamespaceForQName(
+  context: Element,
+  qname: string
+): string | undefined {
+  if (!qname.includes(":")) return undefined;
+
+  const prefix = qname.split(":")[0];
+  let el: Element | null = context;
+
+  while (el) {
+    const namespace = el.getAttribute(`xmlns:${prefix}`);
+    if (namespace) return namespace;
+    el = el.parentElement;
+  }
+
+  return undefined;
+}
+
+function getOgcExceptionMessage(xmlDoc: XMLDocument): string | null {
+  const root = xmlDoc.documentElement;
+
+  const exceptionReport =
+    root.localName === "ExceptionReport" ||
+    root.localName === "ServiceExceptionReport"
+      ? root
+      : firstByLocalName(xmlDoc, "ExceptionReport") ||
+        firstByLocalName(xmlDoc, "ServiceExceptionReport");
+
+  if (!exceptionReport) return null;
+
+  const texts = allByLocalName(exceptionReport, "ExceptionText")
+    .concat(allByLocalName(exceptionReport, "ServiceException"))
+    .map((el) => el.textContent?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  return texts.length > 0
+    ? texts.join("\n")
+    : exceptionReport.textContent?.trim() || "Unknown OGC exception";
+}
+
+function createRequestUrl(
+  baseUrl: string,
+  requestParams: URLSearchParams
+): string {
+  const url = new URL(baseUrl);
+
+  // Fully clean the input URL:
+  // keep only origin + pathname, discard all existing query params.
+  return `${url.origin}${url.pathname}?${requestParams.toString()}`;
+}
+
+function getPreferredCapabilitiesVersions(baseUrl: string): string[] {
+  const url = new URL(baseUrl);
+  const requestedVersion =
+    url.searchParams.get("version") || url.searchParams.get("VERSION");
+
+  return Array.from(
+    new Set(
+      [
+        requestedVersion,
+        ...SUPPORTED_WFS_VERSIONS,
+      ].filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function isWfs2(version?: string): boolean {
+  return Boolean(version?.startsWith("2."));
+}
+
+/**
+ * Try an async operation across multiple WFS versions, returning the first success.
+ * Throws the last error encountered if all attempts fail.
+ */
+async function tryAcrossVersions<T>(
+  versions: string[],
+  attempt: (version: string) => Promise<T>,
+  errorContext: string
+): Promise<T> {
+  let lastError: unknown;
+
+  for (const version of versions) {
+    try {
+      return await attempt(version);
+    } catch (error) {
+      lastError = error;
+      console.warn(`${errorContext} failed for WFS ${version}`, error);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`${errorContext} failed for all attempted WFS versions.`);
+}
+
+function getEffectiveVersions(
+  baseUrl: string,
+  layer?: LayerInfo
+): string[] {
+  return Array.from(
+    new Set(
+      [
+        layer?.serviceVersion,
+        ...getPreferredCapabilitiesVersions(baseUrl),
+      ].filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function buildCapabilitiesParams(version: string): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set("service", "WFS");
+  params.set("version", version);
+  params.set("request", "GetCapabilities");
+  return params;
+}
+
+function buildDescribeFeatureTypeParams(options: {
+  version?: string;
+  typeName: string;
+  namespaceUri?: string;
+}): URLSearchParams {
+  const version = options.version || "2.0.0";
+
+  const params = new URLSearchParams();
+  params.set("service", "WFS");
+  params.set("version", version);
+  params.set("request", "DescribeFeatureType");
+
+  if (isWfs2(version)) {
+    params.set("typeNames", options.typeName);
+  } else {
+    params.set("typeName", options.typeName);
+  }
+
+  if (
+    isWfs2(version) &&
+    options.namespaceUri &&
+    options.typeName.includes(":")
+  ) {
+    const prefix = options.typeName.split(":")[0];
+    params.set("namespaces", `xmlns(${prefix},${options.namespaceUri})`);
+  }
+
+  return params;
+}
+
+function buildGetFeatureParams(options: {
+  version?: string;
+  layerId: string;
+  outputFormat?: string;
+  maxFeatures?: number;
+  srsName?: string;
+  resultType?: "results" | "hits";
+  namespaceUri?: string;
+}): URLSearchParams {
+  const version = options.version || "2.0.0";
+
+  const params = new URLSearchParams();
+  params.set("service", "WFS");
+  params.set("version", version);
+  params.set("request", "GetFeature");
+
+  if (isWfs2(version)) {
+    params.set("typeNames", options.layerId);
+
+    if (options.maxFeatures !== undefined) {
+      params.set("count", String(options.maxFeatures));
+    }
+  } else {
+    params.set("typeName", options.layerId);
+
+    if (options.maxFeatures !== undefined) {
+      params.set("maxFeatures", String(options.maxFeatures));
+    }
+  }
+
+  if (options.resultType) {
+    params.set("resultType", options.resultType);
+  }
+
+  if (options.outputFormat) {
+    params.set("outputFormat", options.outputFormat);
+  }
+
+  if (options.srsName) {
+    params.set("srsName", options.srsName);
+  }
+
+  if (
+    isWfs2(version) &&
+    options.namespaceUri &&
+    options.layerId.includes(":")
+  ) {
+    const prefix = options.layerId.split(":")[0];
+    params.set("namespaces", `xmlns(${prefix},${options.namespaceUri})`);
+  }
+
+  return params;
+}
+
+export async function fetchWfsCapabilities(
+  baseUrl: string
+): Promise<LayerInfo[]> {
+  return tryAcrossVersions(
+    getPreferredCapabilitiesVersions(baseUrl),
+    async (version) => {
+      const capabilitiesUrl = createRequestUrl(
+        baseUrl,
+        buildCapabilitiesParams(version)
+      );
+
+      console.log("Fetching WFS capabilities from:", capabilitiesUrl);
+
+      const response = await fetchWithCorsProxy(capabilitiesUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/xml,text/xml,*/*"
+        }
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch WFS capabilities: ${response.status} ${response.statusText}\n${text.slice(
+            0,
+            ERROR_BODY_PREVIEW_LENGTH
+          )}`
+        );
+      }
+
+      return parseCapabilitiesXml(text);
+    },
+    "Capabilities request"
+  );
+}
+
+function parseCapabilitiesXml(xmlText: string): LayerInfo[] {
+  const xmlDoc = parseXmlOrThrow(xmlText, "WFS capabilities");
+
+  const exceptionMessage = getOgcExceptionMessage(xmlDoc);
+  if (exceptionMessage) {
+    throw new Error(`WFS service exception: ${exceptionMessage}`);
+  }
+
+  const root = xmlDoc.documentElement;
+
+  if (root.localName !== "WFS_Capabilities") {
+    throw new Error(
+      `Response is not a WFS capabilities document. Root element was <${root.localName}>.`
+    );
+  }
+
+  const serviceVersion = root.getAttribute("version") || "unknown";
+
+  const serviceProviderNode = firstByLocalName(xmlDoc, "ServiceProvider");
+  const serviceIdentificationNode = firstByLocalName(
+    xmlDoc,
+    "ServiceIdentification"
+  );
+
+  const contactOrganization =
+    serviceProviderNode && firstChildText(serviceProviderNode, "ProviderName");
+
+  const serviceContactNode =
+    serviceProviderNode &&
+    firstByLocalName(serviceProviderNode, "ServiceContact");
+
+  const contactPerson =
+    serviceContactNode && firstChildText(serviceContactNode, "IndividualName");
+
+  const contactEmailNode =
+    serviceContactNode &&
+    firstByLocalName(serviceContactNode, "ElectronicMailAddress");
+
+  const contactEmail = contactEmailNode?.textContent?.trim();
+
+  const fees =
+    serviceIdentificationNode &&
+    firstChildText(serviceIdentificationNode, "Fees");
+
+  const accessConstraints =
+    serviceIdentificationNode &&
+    firstChildText(serviceIdentificationNode, "AccessConstraints");
+
+  const globalOutputFormats = extractGlobalOutputFormats(xmlDoc);
+
+  const featureTypeList = firstByLocalName(xmlDoc, "FeatureTypeList");
+
+  const featureTypeNodes = featureTypeList
+    ? childrenByLocalName(featureTypeList, "FeatureType")
+    : allByLocalName(xmlDoc, "FeatureType");
+
+  if (featureTypeNodes.length === 0) {
+    throw new Error(
+      "Valid WFS capabilities document, but no FeatureType elements were found."
+    );
+  }
+
+  const layers: LayerInfo[] = [];
+
+  for (const node of featureTypeNodes) {
+    const layerId = firstChildText(node, "Name");
+    if (!layerId) continue;
+
+    const title = firstChildText(node, "Title") || layerId;
+    const abstract = firstChildText(node, "Abstract");
+    const namespaceUri = getNamespaceForQName(node, layerId);
+
+    const crsNodes = Array.from(node.children).filter((el) =>
+      ["DefaultCRS", "OtherCRS", "DefaultSRS", "OtherSRS", "SRS"].includes(
+        el.localName
+      )
+    );
+
+    const projections = Array.from(
+      new Set(
+        crsNodes
+          .map((el) => el.textContent?.trim())
+          .filter((value): value is string => Boolean(value))
+          .map(normalizeCrs)
+      )
+    );
+
+    let defaultProjection = crsNodes
+      .find((el) => ["DefaultCRS", "DefaultSRS", "SRS"].includes(el.localName))
+      ?.textContent?.trim();
+
+    if (defaultProjection) {
+      defaultProjection = normalizeCrs(defaultProjection);
+    }
+
+    if (!defaultProjection && projections.length > 0) {
+      defaultProjection = projections[0];
+    }
+
+    const layerOutputFormats = extractLayerOutputFormats(node);
+
+    const keywords = allByLocalName(node, "Keyword")
+      .map((el) => el.textContent?.trim())
+      .filter((value): value is string => Boolean(value));
+
+    const bounds = extractBounds(node);
+    const metadataUrl = extractMetadataUrl(node);
+
+    layers.push({
+      id: layerId,
+      title,
+      abstract,
+      projections,
+      defaultProjection,
+      outputFormats:
+        layerOutputFormats.length > 0
+          ? layerOutputFormats
+          : globalOutputFormats,
+      serviceVersion,
+      namespaceUri,
+      bounds,
+      keywords,
+      contactPerson: contactPerson || undefined,
+      contactOrganization: contactOrganization || undefined,
+      contactEmail,
+      fees: fees || undefined,
+      accessConstraints: accessConstraints || undefined,
+      metadataUrl
+    });
+  }
+
+  return layers;
+}
+
+function extractGlobalOutputFormats(xmlDoc: XMLDocument): string[] {
+  const formats = new Set<string>();
+
+  const getFeatureOperations = allByLocalName(xmlDoc, "Operation").filter(
+    (el) => el.getAttribute("name") === "GetFeature"
+  );
+
+  for (const operation of getFeatureOperations) {
+    const outputFormatParams = allByLocalName(operation, "Parameter").filter(
+      (el) => el.getAttribute("name") === "outputFormat"
+    );
+
+    for (const param of outputFormatParams) {
+      for (const valueNode of allByLocalName(param, "Value")) {
+        const value = valueNode.textContent?.trim();
+        if (value) formats.add(value);
+      }
+    }
+  }
+
+  // Older WFS style: GetFeature > ResultFormat > GML2 / GML3 / JSON-like child nodes
+  for (const getFeatureNode of allByLocalName(xmlDoc, "GetFeature")) {
+    for (const formatNode of allByLocalName(getFeatureNode, "Format")) {
+      const value = formatNode.textContent?.trim();
+      if (value) formats.add(value);
+    }
+
+    for (const resultFormatNode of allByLocalName(
+      getFeatureNode,
+      "ResultFormat"
+    )) {
+      for (const child of Array.from(resultFormatNode.children)) {
+        if (child.localName) formats.add(child.localName);
+      }
+    }
+  }
+
+  return Array.from(formats);
+}
+
+function extractLayerOutputFormats(featureTypeNode: Element): string[] {
+  const formats = new Set<string>();
+
+  const outputFormatsNode = firstByLocalName(featureTypeNode, "OutputFormats");
+  if (!outputFormatsNode) return [];
+
+  for (const formatNode of allByLocalName(outputFormatsNode, "Format")) {
+    const value = formatNode.textContent?.trim();
+    if (value) formats.add(value);
+  }
+
+  for (const outputFormatNode of allByLocalName(
+    outputFormatsNode,
+    "OutputFormat"
+  )) {
+    const value = outputFormatNode.textContent?.trim();
+    if (value) formats.add(value);
+  }
+
+  return Array.from(formats);
+}
+
+function extractBounds(node: Element): LayerInfo["bounds"] | undefined {
+  const wgsBox = firstByLocalName(node, "WGS84BoundingBox");
+
+  if (wgsBox) {
+    const lower = firstByLocalName(wgsBox, "LowerCorner")
+      ?.textContent?.trim()
+      .split(/\s+/)
+      .map(Number);
+
+    const upper = firstByLocalName(wgsBox, "UpperCorner")
+      ?.textContent?.trim()
+      .split(/\s+/)
+      .map(Number);
+
+    if (lower?.length === 2 && upper?.length === 2) {
+      return {
+        minx: lower[0],
+        miny: lower[1],
+        maxx: upper[0],
+        maxy: upper[1],
+        crs: "EPSG:4326"
+      };
+    }
+  }
+
+  const latLongBox = firstByLocalName(node, "LatLongBoundingBox");
+
+  if (latLongBox) {
+    const minx = Number(latLongBox.getAttribute("minx"));
+    const miny = Number(latLongBox.getAttribute("miny"));
+    const maxx = Number(latLongBox.getAttribute("maxx"));
+    const maxy = Number(latLongBox.getAttribute("maxy"));
+
+    if ([minx, miny, maxx, maxy].every(Number.isFinite)) {
+      return {
+        minx,
+        miny,
+        maxx,
+        maxy,
+        crs: "EPSG:4326"
+      };
+    }
+  }
+
+  const boundingBox = firstByLocalName(node, "BoundingBox");
+
+  if (boundingBox) {
+    const lower = firstByLocalName(boundingBox, "LowerCorner")
+      ?.textContent?.trim()
+      .split(/\s+/)
+      .map(Number);
+
+    const upper = firstByLocalName(boundingBox, "UpperCorner")
+      ?.textContent?.trim()
+      .split(/\s+/)
+      .map(Number);
+
+    if (lower?.length === 2 && upper?.length === 2) {
+      return {
+        minx: lower[0],
+        miny: lower[1],
+        maxx: upper[0],
+        maxy: upper[1],
+        crs:
+          boundingBox.getAttribute("crs") ||
+          boundingBox.getAttribute("SRS") ||
+          undefined
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function extractMetadataUrl(node: Element): string | undefined {
+  const metadataUrlNode = firstByLocalName(node, "MetadataURL");
+  if (!metadataUrlNode) return undefined;
+
+  const onlineResource = firstByLocalName(metadataUrlNode, "OnlineResource");
+
+  if (onlineResource) {
+    return (
+      attr(onlineResource, "href") ||
+      onlineResource.getAttribute("xlink:href") ||
+      undefined
+    );
+  }
+
+  return (
+    attr(metadataUrlNode, "href") ||
+    metadataUrlNode.getAttribute("xlink:href") ||
+    undefined
+  );
+}
+
+export async function fetchDescribeFeatureType(
+  baseUrl: string,
+  typeName: string,
+  layer?: LayerInfo
+): Promise<SchemaInfo> {
+  return tryAcrossVersions(
+    getEffectiveVersions(baseUrl, layer),
+    async (version) => {
+      const describeUrl = createRequestUrl(
+        baseUrl,
+        buildDescribeFeatureTypeParams({
+          version,
+          typeName,
+          namespaceUri: layer?.namespaceUri
+        })
+      );
+
+      console.log("Fetching DescribeFeatureType from:", describeUrl);
+
+      const response = await fetchWithCorsProxy(describeUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/xml,text/xml,*/*"
+        }
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch DescribeFeatureType: ${response.status} ${response.statusText}\n${text.slice(
+            0,
+            ERROR_BODY_PREVIEW_LENGTH
+          )}`
+        );
+      }
+
+      return parseDescribeFeatureTypeXml(text);
+    },
+    `DescribeFeatureType for type ${typeName}`
+  );
+}
+
+export function parseDescribeFeatureTypeXml(xmlText: string): SchemaInfo {
+  const xmlDoc = parseXmlOrThrow(xmlText, "DescribeFeatureType response");
+
+  const exceptionMessage = getOgcExceptionMessage(xmlDoc);
+  if (exceptionMessage) {
+    throw new Error(`WFS service exception: ${exceptionMessage}`);
+  }
+
+  const schemaEl =
+    xmlDoc.documentElement.localName === "schema"
+      ? xmlDoc.documentElement
+      : firstByLocalName(xmlDoc, "schema");
+
+  if (!schemaEl) {
+    throw new Error(
+      "Invalid DescribeFeatureType response: no <schema> element found."
+    );
+  }
+
+  const elements = allByLocalName(schemaEl, "element");
 
   const attributes = elements
     .map((el) => {
       const name = el.getAttribute("name");
       const type = el.getAttribute("type");
-      const nillable = el.getAttribute("nillable") === "true";
-      const minOccurs = el.getAttribute("minOccurs")
-        ? parseInt(el.getAttribute("minOccurs")!, 10)
-        : undefined;
-      const maxOccurs =
-        el.getAttribute("maxOccurs") === "unbounded"
-          ? "unbounded"
-          : el.getAttribute("maxOccurs")
-          ? parseInt(el.getAttribute("maxOccurs")!, 10)
-          : undefined;
 
       if (!name || !type) return null;
 
-      return { name, type, nillable, minOccurs, maxOccurs };
+      const nillable = el.getAttribute("nillable") === "true";
+
+      const minOccursRaw = el.getAttribute("minOccurs");
+      const maxOccursRaw = el.getAttribute("maxOccurs");
+
+      const minOccurs = minOccursRaw ? Number(minOccursRaw) : undefined;
+
+      const maxOccurs =
+        maxOccursRaw === "unbounded"
+          ? "unbounded"
+          : maxOccursRaw
+            ? Number(maxOccursRaw)
+            : undefined;
+
+      return {
+        name,
+        type,
+        nillable,
+        minOccurs,
+        maxOccurs
+      };
     })
-    .filter((field): field is NonNullable<typeof field> => !!field);
+    .filter((field): field is NonNullable<typeof field> => Boolean(field));
 
   return { attributes };
 }
 
-// Helper function to extract geometry from GML
-function extractGeometryFromGml(geomElement: Element): GeoJSON.Geometry | null {
-  const gmlNS = "http://www.opengis.net/gml";
-  const posLists = geomElement.getElementsByTagNameNS(gmlNS, "posList");
+function buildOutputFormatAttempts(
+  layer?: LayerInfo
+): Array<string | undefined> {
+  const advertised = (layer?.outputFormats || [])
+    .map((format) => format.trim())
+    .filter(Boolean);
 
-  if (posLists.length === 0) return null;
+  const jsonAdvertised = advertised.filter((format) =>
+    /json|geojson/i.test(format)
+  );
 
-  const rings: number[][][] = [];
+  const otherAdvertised = advertised.filter(
+    (format) => !/json|geojson/i.test(format)
+  );
 
-  for (const posList of Array.from(posLists)) {
-    const coords = posList.textContent?.trim().split(/\s+/).map(Number) || [];
-    const ring: number[][] = [];
+  const fallbacks: Array<string | undefined> = [
+    "application/json",
+    "application/geo+json",
+    "json",
+    "GEOJSON",
+    "application/gml+xml; version=3.2",
+    "text/xml; subtype=gml/3.2",
+    "text/xml; subtype=gml/3.1.1",
+    "GML3",
+    "GML2",
+    undefined // Let the server choose its default.
+  ];
 
-    for (let i = 0; i < coords.length; i += 2) {
-      ring.push([coords[i], coords[i + 1]]);
+  const seen = new Set<string>();
+
+  return [...jsonAdvertised, ...otherAdvertised, ...fallbacks].filter(
+    (format) => {
+      const key = format || "__server_default__";
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     }
-
-    // Ensure closed ring
-    if (
-      ring.length &&
-      (ring[0][0] !== ring.at(-1)?.[0] || ring[0][1] !== ring.at(-1)?.[1])
-    ) {
-      ring.push([...ring[0]]);
-    }
-
-    rings.push(ring);
-  }
-
-  // Support MultiPolygon if multiple surfaceMembers are found
-  if (rings.length === 1) {
-    return {
-      type: "Polygon",
-      coordinates: rings,
-    };
-  }
-
-  return {
-    type: "MultiPolygon",
-    coordinates: [rings],
-  };
+  );
 }
 
-// Update the processResponse function to handle XML/GML responses
-async function processResponse(response: Response, isGml = false) {
-  try {
-    const contentType = response.headers.get("content-type") || "";
-    const isXml = contentType.includes("xml") || isGml;
-    let data: any;
-
-    if (isXml) {
-      const text = await response.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, "text/xml");
-
-      const gmlNS = "http://www.opengis.net/gml";
-      const wfsNS = "http://www.opengis.net/wfs/2.0";
-
-      data = {
-        type: "FeatureCollection",
-        features: [],
-      };
-
-      const members = xmlDoc.getElementsByTagNameNS(wfsNS, "member");
-
-      if (members.length === 0) {
-        console.warn("No wfs:member elements found. Trying fallback mode.");
-      }
-
-      for (const member of Array.from(members)) {
-        const featureNode = Array.from(member.children)[0]; // Generic — any feature type
-        if (!featureNode) continue;
-
-        const properties: Record<string, any> = {};
-        let geometry: GeoJSON.Geometry | null = null;
-
-        for (const child of Array.from(featureNode.children)) {
-          const tagName = child.localName.toLowerCase();
-
-          if (tagName.includes("geom")) {
-            geometry = extractGeometryFromGml(child);
-          } else {
-            const text = child.textContent?.trim();
-            if (!text) continue;
-
-            let typedValue: any = text;
-            if (/^-?\d+(\.\d+)?$/.test(text)) {
-              typedValue = parseFloat(text);
-            } else if (text.toLowerCase() === "true") {
-              typedValue = true;
-            } else if (text.toLowerCase() === "false") {
-              typedValue = false;
-            }
-
-            properties[tagName] = typedValue;
-          }
-        }
-
-        const id =
-          featureNode.getAttributeNS(gmlNS, "id") ||
-          featureNode.getAttribute("id") ||
-          `feature-${data.features.length}`;
-
-        data.features.push({
-          type: "Feature",
-          id,
-          geometry,
-          properties,
-        });
-      }
-
-      // ✅ Fallback: collect features manually if above failed
-      if (data.features.length === 0) {
-        console.warn("Fallback: no features parsed. Attempting element scan.");
-
-        const allElements = xmlDoc.getElementsByTagName("*");
-        const seenIds = new Set<string>();
-
-        for (const el of Array.from(allElements)) {
-          const id =
-            el.getAttributeNS(gmlNS, "id") || el.getAttribute("id") || null;
-          if (!id || seenIds.has(id)) continue;
-
-          const children = Array.from(el.children);
-          const properties: Record<string, any> = {};
-          let hasProps = false;
-
-          for (const child of children) {
-            const tag = child.localName.toLowerCase();
-            const text = child.textContent?.trim();
-            if (!text || tag === "boundedby") continue;
-
-            if (!tag.includes("geom")) {
-              hasProps = true;
-              properties[tag] = text;
-            }
-          }
-
-          if (hasProps) {
-            seenIds.add(id);
-            data.features.push({
-              type: "Feature",
-              id,
-              geometry: null,
-              properties,
-            });
-          }
-        }
-      }
-    } else {
-      // ✅ Handle JSON/GeoJSON fallback
-      data = await response.json();
-    }
-
-    if (!data.type || !Array.isArray(data.features)) {
-      throw new Error("Invalid response format from WFS");
-    }
-
-    // ✅ Extract unique attributes
-    const attributesSet = new Set<string>();
-    data.features.forEach((feature: any) => {
-      if (feature.properties) {
-        Object.keys(feature.properties).forEach((key) =>
-          attributesSet.add(key)
-        );
-      }
-    });
-
-    const attributes = Array.from(attributesSet).sort();
-    return { data, attributes };
-  } catch (error) {
-    console.error("Error processing WFS response:", error);
-    throw new Error(
-      `Failed to process WFS response: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
-/**
- * Fetches the total count of features in a WFS layer without fetching the actual features
- * @param baseUrl The base WFS URL
- * @param layerId The ID of the layer to count
- * @returns The total number of features
- */
-export async function fetchFeatureCount(
-  baseUrl: string,
-  layerId: string
-): Promise<number> {
-  try {
-    // Ensure the URL is valid
-    let url: URL;
-    try {
-      url = new URL(baseUrl);
-    } catch (e) {
-      throw new Error(`Invalid URL: ${baseUrl}`);
-    }
-
-    // Preserve any authentication or other relevant query params from the original URL
-    const originalParams = new URLSearchParams(url.search);
-    const searchParams = new URLSearchParams();
-
-    // Copy over any authentication params that might be needed
-    for (const [key, value] of originalParams.entries()) {
-      if (
-        ![
-          "service",
-          "version",
-          "request",
-          "typename",
-          "typenames",
-          "outputformat",
-          "count",
-          "resulttype",
-        ].includes(key.toLowerCase())
-      ) {
-        searchParams.set(key, value);
-      }
-    }
-
-    // Add standard WFS parameters for counting
-    searchParams.set("service", "WFS");
-    searchParams.set("version", "2.0.0");
-    searchParams.set("request", "GetFeature");
-    searchParams.set("typeNames", layerId);
-    searchParams.set("resultType", "hits");
-
-    const requestUrl = `${url.origin}${
-      url.pathname
-    }?${searchParams.toString()}`;
-
-    console.log("Fetching feature count from:", requestUrl);
-
-    // Fetch the count
-    const response = await fetch(requestUrl, {
-      method: "GET",
-      headers: {
-        Accept: "text/xml,application/xml",
-      },
-    });
-
-    if (!response.ok) {
-      // Try with typeNames (plural) instead of typeName
-      searchParams.delete("typeNames");
-      searchParams.set("typeName", layerId);
-
-      const alternativeUrl = `${url.origin}${
-        url.pathname
-      }?${searchParams.toString()}`;
-      console.log(
-        "First count attempt failed. Trying alternative URL:",
-        alternativeUrl
-      );
-
-      const alternativeResponse = await fetch(alternativeUrl, {
-        method: "GET",
-        headers: {
-          Accept: "text/xml,application/xml",
-        },
-      });
-
-      if (!alternativeResponse.ok) {
-        // Try with WFS 1.0.0
-        searchParams.set("version", "1.0.0");
-        searchParams.delete("typeNames");
-        searchParams.set("typename", layerId);
-        searchParams.delete("resultType");
-        searchParams.set("resulttype", "hits");
-
-        const legacyUrl = `${url.origin}${
-          url.pathname
-        }?${searchParams.toString()}`;
-        console.log(
-          "Second count attempt failed. Trying legacy URL:",
-          legacyUrl
-        );
-
-        const legacyResponse = await fetch(legacyUrl, {
-          method: "GET",
-          headers: {
-            Accept: "text/xml,application/xml",
-          },
-        });
-
-        if (!legacyResponse.ok) {
-          throw new Error(
-            `Failed to fetch feature count: ${response.status} ${response.statusText}. The WFS service might not support feature counting.`
-          );
-        }
-
-        return await extractFeatureCount(legacyResponse);
-      }
-
-      return await extractFeatureCount(alternativeResponse);
-    }
-
-    return await extractFeatureCount(response);
-  } catch (error) {
-    console.error("Error fetching feature count:", error);
-    throw error;
-  }
-}
-
-/**
- * Extract the feature count from a WFS GetFeature response with resultType=hits
- */
-async function extractFeatureCount(response: Response): Promise<number> {
-  const text = await response.text();
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(text, "text/xml");
-
-  // Try different attribute names for the count
-  // WFS 2.0.0 uses numberMatched, WFS 1.0.0 uses numberOfFeatures
-  const rootElement = xmlDoc.documentElement;
-
-  if (rootElement) {
-    const numberMatched =
-      rootElement.getAttribute("numberMatched") ||
-      rootElement.getAttribute("wfs:numberMatched") ||
-      rootElement.getAttribute("numberOfFeatures") ||
-      rootElement.getAttribute("wfs:numberOfFeatures");
-
-    if (numberMatched) {
-      return Number.parseInt(numberMatched, 10);
-    }
-  }
-
-  // If we can't find the count attribute, return -1 to indicate unknown
-  return -1;
-}
-
-// Update the fetchWfsData function to try JSON first, then fall back to GML
 export async function fetchWfsData(
   baseUrl: string,
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
-  layer?: LayerInfo,
-  isDowload?: boolean
+  layer?: LayerInfo
 ) {
-  try {
-    // Use the layer's default projection if available, otherwise use WGS84
-    const sourceProjection = layer?.defaultProjection || "EPSG:4326";
-    // const sourceProjection =
-    //   (layer?.projections?.includes("EPSG:4326")
-    //     ? "EPSG:4326"
-    //     : layer?.defaultProjection) || "EPSG:4326";
-    console.log(`Using source projection: ${sourceProjection}`);
+  const versions = getEffectiveVersions(baseUrl, layer);
 
-    // Ensure the URL is valid
-    let url: URL;
-    try {
-      url = new URL(baseUrl);
-    } catch (e) {
-      throw new Error(`Invalid URL: ${baseUrl}`);
-    }
+  const sourceProjection =
+    layer?.defaultProjection || layer?.projections?.[0] || undefined;
 
-    // Preserve any authentication or other relevant query params from the original URL
-    const originalParams = new URLSearchParams(url.search);
-    const searchParams = new URLSearchParams();
+  const effectiveMaxFeatures =
+    maxFeatures === 0 ? undefined : Math.max(1, maxFeatures);
 
-    // Copy over any authentication params that might be needed
-    for (const [key, value] of originalParams.entries()) {
-      if (
-        ![
-          "service",
-          "version",
-          "request",
-          "typename",
-          "typenames",
-          "outputformat",
-          "count",
-          "srsname",
-        ].includes(key.toLowerCase())
-      ) {
-        searchParams.set(key, value);
-      }
-    }
+  const outputFormatAttempts = buildOutputFormatAttempts(layer);
 
-    // Always try JSON first, regardless of what's in the metadata
-    let outputFormat = "application/json";
-    const useGmlFallback = false;
-    const formatSupported = true;
-    let jsonFormatInMetadata = false;
+  let lastError: unknown;
 
-    if (layer && layer.outputFormats) {
-      // Check if JSON format is explicitly supported in metadata
-      const jsonFormats = layer.outputFormats.filter(
-        (format) =>
-          format.includes("json") ||
-          format.includes("JSON") ||
-          format.includes("geojson") ||
-          format.includes("GEOJSON")
-      );
-
-      if (jsonFormats.length > 0) {
-        // Use the first JSON format available from metadata
-        outputFormat = jsonFormats[0];
-        jsonFormatInMetadata = true;
-        console.log(`Using JSON output format from metadata: ${outputFormat}`);
-      } else {
-        // JSON not in metadata, but we'll try it anyway
-        console.log(
-          `JSON format not found in metadata, but trying it first anyway`
-        );
-      }
-    }
-
-    // Add standard WFS parameters
-    searchParams.set("service", "WFS");
-    searchParams.set("version", "2.0.0");
-    searchParams.set("request", "GetFeature");
-    searchParams.set("typeNames", layerId);
-    searchParams.set("outputFormat", outputFormat);
-    searchParams.set(
-      "count",
-      maxFeatures === 0 ? "1000000" : maxFeatures.toString()
-    );
-
-    // Use the source projection
-    searchParams.set("srsName", sourceProjection);
-
-    let requestUrl = `${url.origin}${url.pathname}?${searchParams.toString()}`;
-
-    console.log("Fetching WFS data from:", requestUrl);
-
-    // Try multiple approaches to fetch the data
-    try {
-      // First attempt with standard parameters
-      const response = await fetch(requestUrl, {
-        method: "GET",
-        headers: {
-          Accept: useGmlFallback
-            ? "text/xml,application/xml"
-            : "application/json,application/geo+json",
-        },
+  for (const version of versions) {
+    for (const outputFormat of outputFormatAttempts) {
+      const params = buildGetFeatureParams({
+        version,
+        layerId,
+        outputFormat,
+        maxFeatures: effectiveMaxFeatures,
+        srsName: sourceProjection,
+        namespaceUri: layer?.namespaceUri
       });
 
-      let result;
-      result = await processResponse(response, useGmlFallback);
+      const requestUrl = createRequestUrl(baseUrl, params);
 
-      if (result.data.features.length === 0) {
+      console.log("Fetching WFS data from:", requestUrl);
+
+      try {
+        const response = await fetchWithCorsProxy(requestUrl, {
+          method: "GET",
+          headers: {
+            Accept:
+              outputFormat && /json|geojson/i.test(outputFormat)
+                ? "application/json,application/geo+json,text/plain,*/*"
+                : "application/xml,text/xml,*/*"
+          }
+        });
+
+        const result = await processWfsResponse(response, outputFormat);
+
+        return {
+          ...result,
+          sourceProjection,
+          outputFormatUsed: outputFormat || "server-default",
+          serviceVersionUsed: version,
+          requestUrl
+        };
+      } catch (error) {
+        lastError = error;
         console.warn(
-          "Look like there are no features. Carry on trying with GML"
+          `GetFeature failed. Version=${version}, outputFormat=${
+            outputFormat || "server-default"
+          }`,
+          error
         );
-        throw new Error("No Features");
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to fetch WFS data with all attempted formats.");
+}
+
+async function processWfsResponse(
+  response: Response,
+  outputFormat?: string
+): Promise<{
+  data: GeoJSON.FeatureCollection;
+  attributes: string[];
+}> {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  const trimmed = text.trim();
+
+  if (!response.ok) {
+    throw new Error(
+      `WFS request failed: ${response.status} ${response.statusText}\n${trimmed.slice(
+        0,
+        ERROR_BODY_PREVIEW_LENGTH
+      )}`
+    );
+  }
+
+  const shouldTryJson =
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /json|geojson/i.test(contentType) ||
+    /json|geojson/i.test(outputFormat || "");
+
+  if (shouldTryJson) {
+    try {
+      const data = JSON.parse(text);
+
+      if (!data.type || !Array.isArray(data.features)) {
+        throw new Error("JSON response is not a GeoJSON FeatureCollection.");
       }
 
       return {
-        ...result,
-        sourceProjection,
+        data,
+        attributes: extractGeoJsonAttributes(data)
       };
-    } catch (error) {
-      console.log("JSON format attempt failed:", error);
-
-      // If JSON wasn't in metadata and the attempt failed, try GML format
-      if (!jsonFormatInMetadata) {
-        console.log("Trying GML format as fallback");
-
-        // Try with GML format
-        const gmlParams = new URLSearchParams(searchParams);
-        // Find a GML format in the metadata if available
-        let gmlFormat = "text/xml; subtype=gml/3.1.1";
-
-        if (layer && layer.outputFormats) {
-          const gmlFormats = layer.outputFormats.filter(
-            (format) =>
-              format.includes("gml") ||
-              format.includes("GML") ||
-              format.includes("xml") ||
-              format.includes("XML")
-          );
-
-          if (gmlFormats.length > 0) {
-            gmlFormat = gmlFormats[0];
-          }
-        }
-
-        gmlParams.set("outputFormat", gmlFormat);
-
-        const gmlUrl = `${url.origin}${url.pathname}?${gmlParams.toString()}`;
-        console.log("Trying GML format:", gmlUrl);
-
-        try {
-          const gmlResponse = await fetch(gmlUrl, {
-            method: "GET",
-            headers: {
-              Accept: "text/xml,application/xml",
-            },
-          });
-
-          if (!gmlResponse.ok) {
-            throw new Error(`Failed with GML format: ${gmlResponse.status}`);
-          }
-
-          const result = await processResponse(gmlResponse, true);
-          return {
-            ...result,
-            sourceProjection,
-          };
-        } catch (gmlError) {
-          console.log(
-            "GML format attempt failed, trying alternative parameters:",
-            gmlError
-          );
-        }
+    } catch (jsonError) {
+      if (trimmed.startsWith("<")) {
+        return processGmlOrException(text);
       }
 
-      // Continue with the original fallback approaches
-      console.log("Trying alternative parameters");
+      throw jsonError;
+    }
+  }
 
-      // Try with typeNames (plural) instead of typeName
-      const altParams = new URLSearchParams(searchParams);
-      altParams.delete("typeNames");
-      altParams.set("typeName", layerId);
+  if (trimmed.startsWith("<")) {
+    return processGmlOrException(text);
+  }
 
-      const alternativeUrl = `${url.origin}${
-        url.pathname
-      }?${altParams.toString()}`;
-      console.log("Trying alternative URL:", alternativeUrl);
+  throw new Error(
+    `Unsupported WFS response format. Content-Type: ${contentType}. First bytes: ${trimmed.slice(
+      0,
+      UNSUPPORTED_FORMAT_PREVIEW_LENGTH
+    )}`
+  );
+}
 
-      try {
-        const alternativeResponse = await fetch(alternativeUrl, {
-          method: "GET",
-          headers: {
-            Accept: useGmlFallback
-              ? "text/xml,application/xml"
-              : "application/json,application/geo+json",
-          },
-        });
+function processGmlOrException(xmlText: string): {
+  data: GeoJSON.FeatureCollection;
+  attributes: string[];
+} {
+  const xmlDoc = parseXmlOrThrow(xmlText, "WFS GetFeature response");
 
-        if (!alternativeResponse.ok) {
-          throw new Error(`Failed with status: ${alternativeResponse.status}`);
+  const exceptionMessage = getOgcExceptionMessage(xmlDoc);
+  if (exceptionMessage) {
+    throw new Error(`WFS service exception: ${exceptionMessage}`);
+  }
+
+  const data = gmlToGeoJson(xmlDoc);
+
+  return {
+    data,
+    attributes: extractGeoJsonAttributes(data)
+  };
+}
+
+function extractGeoJsonAttributes(data: GeoJSON.FeatureCollection): string[] {
+  const attributes = new Set<string>();
+
+  for (const feature of data.features || []) {
+    for (const key of Object.keys(feature.properties || {})) {
+      attributes.add(key);
+    }
+  }
+
+  return Array.from(attributes).sort();
+}
+
+function gmlToGeoJson(xmlDoc: XMLDocument): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+
+  const members = allByLocalName(xmlDoc, "member")
+    .concat(allByLocalName(xmlDoc, "featureMember"))
+    .concat(allByLocalName(xmlDoc, "featureMembers"));
+
+  for (const member of members) {
+    const candidateFeatures =
+      member.localName === "featureMembers"
+        ? Array.from(member.children)
+        : Array.from(member.children).slice(0, 1);
+
+    for (const featureNode of candidateFeatures) {
+      const feature = parseGmlFeature(featureNode, features.length);
+      if (feature) features.push(feature);
+    }
+  }
+
+  // Fallback: some servers put feature elements directly under FeatureCollection.
+  if (features.length === 0) {
+    const collection =
+      xmlDoc.documentElement.localName === "FeatureCollection"
+        ? xmlDoc.documentElement
+        : firstByLocalName(xmlDoc, "FeatureCollection");
+
+    if (collection) {
+      for (const child of Array.from(collection.children)) {
+        if (
+          ["boundedBy", "member", "featureMember", "featureMembers"].includes(
+            child.localName
+          )
+        ) {
+          continue;
         }
 
-        const result = await processResponse(
-          alternativeResponse,
-          useGmlFallback
-        );
-        return {
-          ...result,
-          sourceProjection,
-        };
-      } catch (altError) {
-        console.log("Second attempt failed, trying WFS 1.0.0:", altError);
-
-        // Try with WFS 1.0.0
-        const legacyParams = new URLSearchParams();
-        legacyParams.set("service", "WFS");
-        legacyParams.set("version", "1.0.0");
-        legacyParams.set("request", "GetFeature");
-        legacyParams.set("typename", layerId);
-        legacyParams.set("outputFormat", outputFormat);
-        legacyParams.set("maxFeatures", maxFeatures.toString());
-        legacyParams.set("srsName", sourceProjection);
-
-        const legacyUrl = `${url.origin}${
-          url.pathname
-        }?${legacyParams.toString()}`;
-        console.log("Trying legacy URL:", legacyUrl);
-
-        const legacyResponse = await fetch(legacyUrl, {
-          method: "GET",
-          headers: {
-            Accept: useGmlFallback
-              ? "text/xml,application/xml"
-              : "application/json,application/geo+json",
-          },
-        });
-
-        if (!legacyResponse.ok) {
-          // Try one more time with GML format and convert it
-          const gmlParams = new URLSearchParams(legacyParams);
-          gmlParams.delete("outputFormat");
-
-          const gmlUrl = `${url.origin}${gmlParams.toString()}`;
-          console.log("Trying GML format as last resort:", gmlUrl);
-
-          const gmlResponse = await fetch(gmlUrl, {
-            method: "GET",
-            headers: {
-              Accept: "text/xml,application/xml",
-            },
-          });
-
-          if (!gmlResponse.ok) {
-            throw new Error(
-              `Failed to fetch WFS data after multiple attempts. The WFS service might not support CORS or the requested format.`
-            );
-          }
-
-          const result = await processResponse(gmlResponse, true);
-          return {
-            ...result,
-            sourceProjection,
-          };
-        }
-
-        const result = await processResponse(legacyResponse, useGmlFallback);
-        return {
-          ...result,
-          sourceProjection,
-        };
+        const feature = parseGmlFeature(child, features.length);
+        if (feature) features.push(feature);
       }
     }
-  } catch (error) {
-    console.error("Error fetching WFS data:", error);
-    throw error;
+  }
+
+  return {
+    type: "FeatureCollection",
+    features
+  };
+}
+
+function parseGmlFeature(
+  featureNode: Element,
+  index: number
+): GeoJSON.Feature | null {
+  const properties: Record<string, unknown> = {};
+  let geometry: GeoJSON.Geometry | null = null;
+
+  for (const child of Array.from(featureNode.children)) {
+    if (child.localName === "boundedBy") continue;
+
+    if (containsGeometry(child)) {
+      geometry = parseGmlGeometry(child);
+      continue;
+    }
+
+    const value = child.textContent?.trim();
+
+    if (value) {
+      properties[child.localName] = coerceValue(value);
+    }
+  }
+
+  const id =
+    attr(featureNode, "id") || attr(featureNode, "fid") || `feature-${index}`;
+
+  if (!geometry && Object.keys(properties).length === 0) {
+    return null;
+  }
+
+  return {
+    type: "Feature",
+    id,
+    geometry,
+    properties
+  };
+}
+
+const GML_GEOMETRY_NAMES = [
+  "Point",
+  "MultiPoint",
+  "LineString",
+  "Curve",
+  "MultiLineString",
+  "MultiCurve",
+  "Polygon",
+  "Surface",
+  "MultiPolygon",
+  "MultiSurface"
+];
+
+function containsGeometry(el: Element): boolean {
+  if (GML_GEOMETRY_NAMES.includes(el.localName)) return true;
+
+  return allByLocalNames(el, GML_GEOMETRY_NAMES).length > 0;
+}
+
+function findGeometryElement(root: Element): Element | undefined {
+  if (GML_GEOMETRY_NAMES.includes(root.localName)) return root;
+
+  return allByLocalNames(root, GML_GEOMETRY_NAMES)[0];
+}
+
+function parseGmlGeometry(root: Element): GeoJSON.Geometry | null {
+  const geometryEl = findGeometryElement(root);
+  if (!geometryEl) return null;
+
+  switch (geometryEl.localName) {
+    case "Point": {
+      const coords = readFirstCoordinateSequence(geometryEl);
+      return coords.length > 0
+        ? {
+            type: "Point",
+            coordinates: coords[0]
+          }
+        : null;
+    }
+
+    case "MultiPoint": {
+      const points = allByLocalName(geometryEl, "Point")
+        .map(readFirstCoordinateSequence)
+        .filter((coords) => coords.length > 0)
+        .map((coords) => coords[0]);
+
+      return points.length > 0
+        ? {
+            type: "MultiPoint",
+            coordinates: points
+          }
+        : null;
+    }
+
+    case "LineString":
+    case "Curve": {
+      const coords = readFirstCoordinateSequence(geometryEl);
+
+      return coords.length > 0
+        ? {
+            type: "LineString",
+            coordinates: coords
+          }
+        : null;
+    }
+
+    case "MultiLineString":
+    case "MultiCurve": {
+      const lines = allByLocalName(geometryEl, "LineString")
+        .concat(allByLocalName(geometryEl, "Curve"))
+        .map(readFirstCoordinateSequence)
+        .filter((coords) => coords.length > 0);
+
+      return lines.length > 0
+        ? {
+            type: "MultiLineString",
+            coordinates: lines
+          }
+        : null;
+    }
+
+    case "Polygon":
+    case "Surface": {
+      const rings = readPolygonRings(geometryEl);
+
+      return rings.length > 0
+        ? {
+            type: "Polygon",
+            coordinates: rings
+          }
+        : null;
+    }
+
+    case "MultiPolygon":
+    case "MultiSurface": {
+      const polygons = allByLocalName(geometryEl, "Polygon")
+        .concat(allByLocalName(geometryEl, "Surface"))
+        .map(readPolygonRings)
+        .filter((rings) => rings.length > 0);
+
+      return polygons.length > 0
+        ? {
+            type: "MultiPolygon",
+            coordinates: polygons
+          }
+        : null;
+    }
+
+    default:
+      return null;
   }
 }
 
-// Update the existing fetchWfsDataForDownload to use the new function for native projection
+function readFirstCoordinateSequence(root: Element): number[][] {
+  const posList = firstByLocalName(root, "posList");
+
+  if (posList?.textContent) {
+    return numbersToCoordinateTuples(
+      posList.textContent,
+      getSrsDimension(posList) || getSrsDimension(root) || 2
+    );
+  }
+
+  const positions = allByLocalName(root, "pos");
+
+  if (positions.length > 0) {
+    return positions.flatMap((pos) =>
+      numbersToCoordinateTuples(
+        pos.textContent || "",
+        getSrsDimension(pos) || getSrsDimension(root) || 2
+      )
+    );
+  }
+
+  const coordinates = firstByLocalName(root, "coordinates");
+
+  if (coordinates?.textContent) {
+    return coordinates.textContent
+      .trim()
+      .split(/\s+/)
+      .map((pair) => pair.split(",").map(Number))
+      .filter((pair) => pair.length >= 2 && pair.every(Number.isFinite));
+  }
+
+  return [];
+}
+
+function readPolygonRings(polygon: Element): number[][][] {
+  const rings: number[][][] = [];
+
+  const linearRings = allByLocalName(polygon, "LinearRing");
+
+  for (const ringNode of linearRings) {
+    const ring = readFirstCoordinateSequence(ringNode);
+
+    if (ring.length > 0) {
+      const first = ring[0];
+      const last = ring[ring.length - 1];
+
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        ring.push([...first]);
+      }
+
+      rings.push(ring);
+    }
+  }
+
+  // Some GML has posList directly inside Polygon/Surface without LinearRing.
+  if (rings.length === 0) {
+    const coords = readFirstCoordinateSequence(polygon);
+
+    if (coords.length > 0) {
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        coords.push([...first]);
+      }
+
+      rings.push(coords);
+    }
+  }
+
+  return rings;
+}
+
+function getSrsDimension(el: Element): number | undefined {
+  const raw =
+    el.getAttribute("srsDimension") ||
+    el.getAttribute("dimension") ||
+    undefined;
+
+  if (!raw) return undefined;
+
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 2 ? value : undefined;
+}
+
+function numbersToCoordinateTuples(text: string, dimension = 2): number[][] {
+  const nums = text.trim().split(/\s+/).map(Number);
+  const coords: number[][] = [];
+
+  for (let i = 0; i + dimension - 1 < nums.length; i += dimension) {
+    const tuple = nums.slice(i, i + dimension);
+
+    if (tuple.length >= 2 && tuple.every(Number.isFinite)) {
+      coords.push(tuple);
+    }
+  }
+
+  return coords;
+}
+
+function coerceValue(value: string): unknown {
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  return value;
+}
+
+export async function fetchFeatureCount(
+  baseUrl: string,
+  layerId: string,
+  layer?: LayerInfo
+): Promise<number> {
+  return tryAcrossVersions(
+    getEffectiveVersions(baseUrl, layer),
+    async (version) => {
+      const params = buildGetFeatureParams({
+        version,
+        layerId,
+        resultType: "hits",
+        namespaceUri: layer?.namespaceUri
+      });
+
+      const requestUrl = createRequestUrl(baseUrl, params);
+
+      console.log("Fetching WFS feature count from:", requestUrl);
+
+      const response = await fetchWithCorsProxy(requestUrl, {
+        method: "GET",
+        headers: {
+          Accept: "application/xml,text/xml,*/*"
+        }
+      });
+
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch feature count: ${response.status} ${response.statusText}\n${text.slice(
+            0,
+            ERROR_BODY_PREVIEW_LENGTH
+          )}`
+        );
+      }
+
+      return extractFeatureCountFromXml(text);
+    },
+    "Feature count request"
+  );
+}
+
+function extractFeatureCountFromXml(xmlText: string): number {
+  const xmlDoc = parseXmlOrThrow(xmlText, "WFS hits response");
+
+  const exceptionMessage = getOgcExceptionMessage(xmlDoc);
+  if (exceptionMessage) {
+    throw new Error(`WFS service exception: ${exceptionMessage}`);
+  }
+
+  const root = xmlDoc.documentElement;
+
+  const raw =
+    root.getAttribute("numberMatched") ||
+    root.getAttribute("numberOfFeatures") ||
+    root.getAttribute("numberReturned") ||
+    attr(root, "numberMatched") ||
+    attr(root, "numberOfFeatures") ||
+    attr(root, "numberReturned");
+
+  if (!raw || raw === "unknown") {
+    return -1;
+  }
+
+  const count = Number(raw);
+  return Number.isFinite(count) ? count : -1;
+}
+
 export async function fetchWfsDataForDownload(
   baseUrl: string,
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
   layer?: LayerInfo,
-  useNativeProjection = false,
-  isDownload?: boolean
-) {
-  // Declare fetchWfsNativeData here to avoid the "variable is undeclared" error
-  async function fetchWfsNativeData(
-    baseUrl: string,
-    layerId: string,
-    maxFeatures: number = DEFAULT_MAX_FEATURES,
-    layer?: LayerInfo
-  ) {
-    // Use the layer's default projection if available, otherwise use WGS84
-    const sourceProjection = layer?.defaultProjection || "EPSG:4326";
-    console.log(`Using source projection: ${sourceProjection}`);
-
-    // Ensure the URL is valid
-    let url: URL;
-    try {
-      url = new URL(baseUrl);
-    } catch (e) {
-      throw new Error(`Invalid URL: ${baseUrl}`);
-    }
-
-    // Preserve any authentication or other relevant query params from the original URL
-    const originalParams = new URLSearchParams(url.search);
-    const searchParams = new URLSearchParams();
-
-    // Copy over any authentication params that might be needed
-    for (const [key, value] of originalParams.entries()) {
-      if (
-        ![
-          "service",
-          "version",
-          "request",
-          "typename",
-          "typenames",
-          "outputformat",
-          "count",
-          "srsname",
-        ].includes(key.toLowerCase())
-      ) {
-        searchParams.set(key, value);
-      }
-    }
-
-    // Check for supported output formats
-    let outputFormat = "application/json";
-    let useGmlFallback = false;
-    let formatSupported = true;
-
-    if (layer && layer.outputFormats) {
-      // Check if JSON format is supported
-      const jsonFormats = layer.outputFormats.filter(
-        (format) =>
-          format.includes("json") ||
-          format.includes("JSON") ||
-          format.includes("geojson") ||
-          format.includes("GEOJSON")
-      );
-
-      if (jsonFormats.length > 0) {
-        // Use the first JSON format available
-        outputFormat = jsonFormats[0];
-        console.log(`Using JSON output format: ${outputFormat}`);
-      } else {
-        // Check if GML format is supported as fallback
-        const gmlFormats = layer.outputFormats.filter(
-          (format) =>
-            format.includes("gml") ||
-            format.includes("GML") ||
-            format.includes("xml") ||
-            format.includes("XML")
-        );
-
-        if (gmlFormats.length > 0) {
-          // Use GML as fallback
-          outputFormat = gmlFormats[0];
-          useGmlFallback = true;
-          console.log(
-            `JSON format not supported. Using GML fallback: ${outputFormat}`
-          );
-        } else {
-          // Neither JSON nor GML is supported
-          formatSupported = false;
-          console.error(
-            "Neither JSON nor GML format is supported by this WFS service"
-          );
-
-          // Dispatch an event to notify about unsupported format
-          if (typeof document !== "undefined") {
-            const formatErrorEvent = new CustomEvent("format-error", {
-              detail: {
-                message: "Unsupported output format",
-                supportedFormats: layer.outputFormats,
-                jsonAttempted: false, // Initially false, will be set to true if we actually try JSON and it fails
-              },
-            });
-            document.dispatchEvent(formatErrorEvent);
-          }
-
-          throw new Error(
-            "This WFS service does not support JSON or GML output formats"
-          );
+  useNativeProjection = false
+): Promise<string> {
+  const requestLayer =
+    !useNativeProjection && layer?.projections?.includes("EPSG:4326")
+      ? {
+          ...layer,
+          defaultProjection: "EPSG:4326"
         }
-      }
-    }
+      : layer;
 
-    // Add standard WFS parameters
-    searchParams.set("service", "WFS");
-    searchParams.set("version", "2.0.0");
-    searchParams.set("request", "GetFeature");
-    searchParams.set("typeName", layerId);
-    searchParams.set("outputFormat", outputFormat);
-    searchParams.set(
-      "count",
-      maxFeatures === 0 ? "1000000" : maxFeatures.toString()
-    );
+  const { data } = await fetchWfsData(
+    baseUrl,
+    layerId,
+    maxFeatures,
+    requestLayer
+  );
 
-    // Use the source projection
-    searchParams.set("srsName", sourceProjection);
-
-    const requestUrl = `${url.origin}${
-      url.pathname
-    }?${searchParams.toString()}`;
-
-    console.log("Fetching WFS data from:", requestUrl);
-
-    // Try multiple approaches to fetch the data
-    try {
-      // First attempt with standard parameters
-      const response = await fetch(requestUrl, {
-        method: "GET",
-        headers: {
-          Accept: useGmlFallback
-            ? "text/xml,application/xml"
-            : "application/json,application/geo+json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed with status: ${response.status}`);
-      }
-
-      const result = await processResponse(response, useGmlFallback);
-      return {
-        data: result.data,
-        sourceProjection,
-      };
-    } catch (error) {
-      console.log(
-        "First attempt failed, trying alternative parameters:",
-        error
-      );
-
-      // Try with typeNames (plural) instead of typeName
-      const altParams = new URLSearchParams(searchParams);
-      altParams.delete("typeName");
-      altParams.set("typeNames", layerId);
-
-      const alternativeUrl = `${url.origin}${
-        url.pathname
-      }?${altParams.toString()}`;
-      console.log("url.origin ", url.origin);
-      console.log("Trying alternative URL:", alternativeUrl);
-
-      try {
-        const alternativeResponse = await fetch(alternativeUrl, {
-          method: "GET",
-          headers: {
-            Accept: useGmlFallback
-              ? "text/xml,application/xml"
-              : "application/json,application/geo+json",
-          },
-        });
-
-        if (!alternativeResponse.ok) {
-          throw new Error(`Failed with status: ${alternativeResponse.status}`);
-        }
-
-        const result = await processResponse(
-          alternativeResponse,
-          useGmlFallback
-        );
-        return {
-          data: result.data,
-          sourceProjection,
-        };
-      } catch (altError) {
-        console.log("Second attempt failed, trying WFS 1.0.0:", altError);
-
-        // Try with WFS 1.0.0
-        const legacyParams = new URLSearchParams();
-        legacyParams.set("service", "WFS");
-        legacyParams.set("version", "1.0.0");
-        legacyParams.set("request", "GetFeature");
-        legacyParams.set("typename", layerId);
-        legacyParams.set("outputFormat", outputFormat);
-        legacyParams.set("maxFeatures", maxFeatures.toString());
-        legacyParams.set("srsName", sourceProjection);
-
-        const legacyUrl = `${url.origin}${legacyParams.toString()}`;
-        console.log("Trying legacy URL:", legacyUrl);
-
-        const legacyResponse = await fetch(legacyUrl, {
-          method: "GET",
-          headers: {
-            Accept: useGmlFallback
-              ? "text/xml,application/xml"
-              : "application/json,application/geo+json",
-          },
-        });
-
-        if (!legacyResponse.ok) {
-          // Try one more time with GML format and convert it
-          const gmlParams = new URLSearchParams(legacyParams);
-          gmlParams.delete("outputFormat");
-
-          const gmlUrl = `${url.origin}${gmlParams.toString()}`;
-          console.log("Trying GML format as last resort:", gmlUrl);
-
-          const gmlResponse = await fetch(gmlUrl, {
-            method: "GET",
-            headers: {
-              Accept: "text/xml,application/xml",
-            },
-          });
-
-          if (!gmlResponse.ok) {
-            throw new Error(
-              `Failed to fetch WFS data after multiple attempts. The WFS service might not support CORS or the requested format.`
-            );
-          }
-
-          const result = await processResponse(gmlResponse, true);
-          return {
-            data: result.data,
-            sourceProjection,
-          };
-        }
-
-        const result = await processResponse(legacyResponse, useGmlFallback);
-        return {
-          data: result.data,
-          sourceProjection,
-        };
-      }
-    }
-  }
-
-  try {
-    // If maxFeatures is 0, it means download all features
-    const effectiveMaxFeatures = maxFeatures === 0 ? 1000000 : maxFeatures;
-
-    if (useNativeProjection) {
-      // Fetch data in native projection
-      const { data, sourceProjection } = await fetchWfsNativeData(
-        baseUrl,
-        layerId,
-        effectiveMaxFeatures,
-        layer
-      );
-      console.log(`Returning data in native projection: ${sourceProjection}`);
-      return JSON.stringify(data, null, 2);
-    } else {
-      // Fetch the data using the existing fetchWfsData function that reprojects to WGS84
-      const { data } = await fetchWfsData(
-        baseUrl,
-        layerId,
-        effectiveMaxFeatures,
-        layer,
-        isDownload
-      );
-      return JSON.stringify(data, null, 2);
-    }
-  } catch (error) {
-    console.error("Error fetching WFS data for download:", error);
-    throw error;
-  }
+  return JSON.stringify(data, null, 2);
 }
 
 export async function fetchCapabilities(baseUrl: string): Promise<LayerInfo[]> {
