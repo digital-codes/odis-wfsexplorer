@@ -10,7 +10,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
+  CardDescription
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -33,13 +33,13 @@ import {
   WandSparkles,
   TableOfContents,
   Sigma,
-  X,
+  X
 } from "lucide-react";
 import {
   fetchWfsCapabilities,
   fetchWfsData,
   fetchFeatureCount,
-  type LayerInfo,
+  type LayerInfo
 } from "@/lib/wfs-service";
 import { LayerSelector } from "@/components/layer-selector";
 import { FeatureCountSelector } from "@/components/feature-count-selector";
@@ -62,7 +62,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   normalizeProjectionCode,
   reprojectGeometry,
-  isLikelyWGS84,
+  isLikelyWGS84
 } from "@/lib/geo-utils";
 
 // Use dynamic import with no SSR for the MapPreview component
@@ -75,7 +75,7 @@ const MapPreview = dynamic(() => import("@/components/map-preview"), {
         <p>loading</p>
       </div>
     </div>
-  ),
+  )
 });
 
 // Change to default export
@@ -87,6 +87,7 @@ export default function WfsAnalyzer() {
     mdId?: string;
     cswUrl?: string;
     unavailableReason?: string;
+    layers?: string[];
   };
 
   const { t } = useLanguage();
@@ -144,6 +145,7 @@ export default function WfsAnalyzer() {
   const [visibleDatasetKeys, setVisibleDatasetKeys] = useState<
     Record<string, boolean>
   >({});
+  const [pendingLayerName, setPendingLayerName] = useState<string | null>(null);
   const datasetListRef = useRef<HTMLDivElement>(null);
   const datasetItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const datasetDropdownWrapperRef = useRef<HTMLDivElement>(null);
@@ -192,8 +194,8 @@ export default function WfsAnalyzer() {
     const response = await fetch(cswEndpoint.toString(), {
       method: "GET",
       headers: {
-        Accept: "application/xml,text/xml",
-      },
+        Accept: "application/xml,text/xml"
+      }
     });
 
     if (!response.ok) {
@@ -238,7 +240,7 @@ export default function WfsAnalyzer() {
     if (wfsResources.length > 0) {
       return {
         name: mdId,
-        url: wfsResources[0].url,
+        url: wfsResources[0].url
       };
     }
 
@@ -246,14 +248,14 @@ export default function WfsAnalyzer() {
       return {
         name: mdId,
         url: "",
-        unavailableReason: "Only WMS was found in this CSW record.",
+        unavailableReason: t("onlyWMSavailable") + wmsResources[0].url
       };
     }
 
     return {
       name: mdId,
       url: "",
-      unavailableReason: "No WFS endpoint was found in this CSW record.",
+      unavailableReason: "No WFS was found for the dataset"
     };
   };
 
@@ -295,8 +297,8 @@ export default function WfsAnalyzer() {
       const response = await fetch(datasetsUrl, {
         method: "GET",
         headers: {
-          Accept: "application/json",
-        },
+          Accept: "application/json"
+        }
       });
 
       if (!response.ok) {
@@ -317,8 +319,8 @@ export default function WfsAnalyzer() {
         {
           method: "GET",
           headers: {
-            Accept: "application/json",
-          },
+            Accept: "application/json"
+          }
         }
       );
 
@@ -346,6 +348,7 @@ export default function WfsAnalyzer() {
       name?: unknown;
       url?: unknown;
       typ?: unknown;
+      layers?: unknown;
       datasets?: Array<{
         md_id?: unknown;
         csw_url?: unknown;
@@ -365,6 +368,11 @@ export default function WfsAnalyzer() {
           typeof d.datasets?.[0]?.csw_url === "string"
             ? d.datasets[0].csw_url
             : undefined;
+        const layers = Array.isArray(d.layers)
+          ? d.layers.filter((l): l is string => typeof l === "string")
+          : typeof d.layers === "string"
+            ? [d.layers]
+            : undefined;
 
         if (!name && !url && !mdId) return null;
         if (typ && typ !== "wfs" && typ !== "wms") return null;
@@ -375,6 +383,7 @@ export default function WfsAnalyzer() {
           typ,
           mdId,
           cswUrl,
+          layers: layers && layers.length > 0 ? layers : undefined
         } as SearchDataset;
       })
       .filter((dataset): dataset is SearchDataset => !!dataset)
@@ -383,7 +392,7 @@ export default function WfsAnalyzer() {
           b.name || b.url || "",
           undefined,
           {
-            sensitivity: "base",
+            sensitivity: "base"
           }
         )
       );
@@ -445,29 +454,74 @@ export default function WfsAnalyzer() {
     );
   }, [filteredDatasets]);
 
-  let firstLoad = false;
+  // Handle auto-selecting layer from URL param on initial load
+  const urlLayerLoadedRef = useRef(false);
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      if (firstLoad) return;
+    if (
+      typeof window !== "undefined" &&
+      !urlLayerLoadedRef.current &&
+      availableLayers.length > 0
+    ) {
       const params = new URLSearchParams(window.location.search);
       const wfsLayer = params.get("layer");
 
-      const layerFound = availableLayers.filter((l) => {
-        if (l.id === wfsLayer) {
-          return l;
+      if (wfsLayer) {
+        // Try exact match first
+        let layerFound = availableLayers.find((l) => l.id === wfsLayer);
+
+        // If not found, try matching by layer name suffix
+        if (!layerFound) {
+          layerFound = availableLayers.find(
+            (l) =>
+              l.id.endsWith(`:${wfsLayer}`) ||
+              wfsLayer.endsWith(`:${l.id}`) ||
+              l.id.split(":").pop() === wfsLayer.split(":").pop()
+          );
         }
-      });
 
-      if (layerFound && layerFound[0]?.id) {
-        setTimeout(() => {
-          setSelectedLayer(layerFound[0]);
-          fetchLayerData(layerFound[0]);
-        }, 0);
+        if (layerFound) {
+          urlLayerLoadedRef.current = true;
+          setTimeout(() => {
+            setSelectedLayer(layerFound);
+            fetchLayerData(layerFound);
+          }, 0);
+        }
       }
-
-      firstLoad = true;
     }
   }, [availableLayers]);
+
+  // Handle auto-selecting layer from pending layer name (from datasets selection)
+  useEffect(() => {
+    if (pendingLayerName && availableLayers.length > 0) {
+      // Try exact match first
+      let layerFound = availableLayers.find((l) => l.id === pendingLayerName);
+
+      // If not found, try matching by layer name suffix (e.g., "namespace:layername" vs "layername")
+      if (!layerFound) {
+        layerFound = availableLayers.find(
+          (l) =>
+            l.id.endsWith(`:${pendingLayerName}`) ||
+            pendingLayerName.endsWith(`:${l.id}`) ||
+            l.id.split(":").pop() === pendingLayerName.split(":").pop()
+        );
+      }
+
+      if (layerFound) {
+        setTimeout(() => {
+          setSelectedLayer(layerFound);
+          fetchLayerData(layerFound);
+          setPendingLayerName(null);
+        }, 0);
+      } else {
+        // Layer not found - clear pending state
+        console.log(
+          `Layer "${pendingLayerName}" not found in available layers:`,
+          availableLayers.map((l) => l.id)
+        );
+        setPendingLayerName(null);
+      }
+    }
+  }, [availableLayers, pendingLayerName]);
 
   useEffect(() => {
     const handleProjectionError = (event: any) => {
@@ -646,6 +700,13 @@ export default function WfsAnalyzer() {
     setDatasetInfoMessage(null);
     setResolvingDatasetKey(datasetKey);
 
+    // Set pending layer if dataset has layers property
+    if (dataset.layers && dataset.layers.length > 0) {
+      setPendingLayerName(dataset.layers[0]);
+    } else {
+      setPendingLayerName(null);
+    }
+
     try {
       let urlToAnalyze = dataset.url;
       const shouldResolveCsw =
@@ -661,7 +722,7 @@ export default function WfsAnalyzer() {
         if (!resolved.url) {
           setWmsResolutionState((prev) => ({
             ...prev,
-            [datasetKey]: "no-wfs",
+            [datasetKey]: "no-wfs"
           }));
           setDatasetInfoMessage(
             `${dataset.name}: ${
@@ -682,7 +743,7 @@ export default function WfsAnalyzer() {
                   ...entry,
                   url: resolved.url,
                   typ: "wfs",
-                  unavailableReason: undefined,
+                  unavailableReason: undefined
                 }
               : entry
           )
@@ -734,7 +795,7 @@ export default function WfsAnalyzer() {
         const datasetKey = `${dataset.name}-${dataset.mdId || dataset.url}`;
         setWmsResolutionState((prev) => ({
           ...prev,
-          [datasetKey]: "checking",
+          [datasetKey]: "checking"
         }));
 
         try {
@@ -751,7 +812,7 @@ export default function WfsAnalyzer() {
                       ...entry,
                       url: resolved.url,
                       typ: "wfs",
-                      unavailableReason: undefined,
+                      unavailableReason: undefined
                     }
                   : entry
               )
@@ -759,7 +820,7 @@ export default function WfsAnalyzer() {
           } else {
             setWmsResolutionState((prev) => ({
               ...prev,
-              [datasetKey]: "no-wfs",
+              [datasetKey]: "no-wfs"
             }));
             setSearchDatasets((prev) =>
               prev.map((entry) =>
@@ -768,7 +829,7 @@ export default function WfsAnalyzer() {
                       ...entry,
                       unavailableReason:
                         resolved.unavailableReason ||
-                        "Only WMS was found in this CSW record.",
+                        "Only WMS was found in this CSW record."
                     }
                   : entry
               )
@@ -779,14 +840,14 @@ export default function WfsAnalyzer() {
             error instanceof Error ? error.message : "Failed to resolve CSW.";
           setWmsResolutionState((prev) => ({
             ...prev,
-            [datasetKey]: "no-wfs",
+            [datasetKey]: "no-wfs"
           }));
           setSearchDatasets((prev) =>
             prev.map((entry) =>
               entry.mdId === dataset.mdId
                 ? {
                     ...entry,
-                    unavailableReason: message,
+                    unavailableReason: message
                   }
                 : entry
             )
@@ -803,7 +864,7 @@ export default function WfsAnalyzer() {
     filteredDatasets,
     showDatasetDropdown,
     visibleDatasetKeys,
-    wmsResolutionState,
+    wmsResolutionState
   ]);
 
   useEffect(() => {
@@ -828,7 +889,7 @@ export default function WfsAnalyzer() {
       },
       {
         root: datasetListRef.current,
-        threshold: 0.1,
+        threshold: 0.1
       }
     );
 
@@ -956,7 +1017,7 @@ export default function WfsAnalyzer() {
       const {
         data,
         attributes: fetchedAttributes,
-        sourceProjection,
+        sourceProjection
       } = await fetchWfsData(urlToUse, layer.id, maxFeaturesValue, layer);
 
       let detectedProjection = sourceProjection;
@@ -1100,7 +1161,7 @@ export default function WfsAnalyzer() {
     if (mapContainerRef.current) {
       mapContainerRef.current.scrollIntoView({
         behavior: "smooth",
-        block: "start",
+        block: "start"
       });
     }
   };
@@ -1247,7 +1308,7 @@ export default function WfsAnalyzer() {
                   style={{
                     position: "absolute",
                     right: "0px",
-                    top: "-5px",
+                    top: "-5px"
                     // width: "85px",
                     // transform: "rotateY(180deg)",
                   }}
@@ -1273,7 +1334,7 @@ export default function WfsAnalyzer() {
                     maxWidth: "250px",
                     backgroundColor: "#4c68c7",
                     color: "white",
-                    zIndex: 30,
+                    zIndex: 30
                   }}
                 />
               </div>
@@ -1494,25 +1555,14 @@ export default function WfsAnalyzer() {
                             <div className="font-medium text-sm text-slate-900 flex items-center justify-between gap-2">
                               {dataset.name || "Unnamed dataset"}
                               {dataset.typ === "wms" && (
-                                <span
-                                  className="text-xs font-semibold"
-                                  title={
-                                    wmsStatus === "unchecked"
-                                      ? "WFS alternative not checked yet"
-                                      : wmsStatus === "checking"
-                                      ? "Checking CSW for WFS alternative"
-                                      : wmsStatus === "wfs"
-                                      ? "WFS alternative found"
-                                      : "No WFS alternative found"
-                                  }
-                                >
+                                <span className="text-xs font-semibold">
                                   {wmsStatus === "unchecked"
-                                    ? "?"
+                                    ? ""
                                     : wmsStatus === "checking"
-                                    ? "…"
-                                    : wmsStatus === "wfs"
-                                    ? "✓"
-                                    : "x"}
+                                      ? ""
+                                      : wmsStatus === "wfs"
+                                        ? ""
+                                        : t("noWFSAvailable")}
                                 </span>
                               )}
                             </div>
@@ -1520,10 +1570,10 @@ export default function WfsAnalyzer() {
                               {isResolving
                                 ? "Resolving CSW record..."
                                 : dataset.typ === "wms" &&
-                                  wmsStatus === "no-wfs"
-                                ? dataset.unavailableReason ||
-                                  "No WFS alternative found."
-                                : dataset.url || "Resolve from CSW record"}
+                                    wmsStatus === "no-wfs"
+                                  ? dataset.unavailableReason ||
+                                    "No WFS alternative found."
+                                  : dataset.url || "Resolve from CSW record"}
                             </div>
                           </button>
                         );

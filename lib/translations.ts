@@ -266,7 +266,8 @@ export type TranslationKey =
   | "next"
   | "onlyWMSavailable"
   | "noMatchSearch"
-  | "loadingDatasets";
+  | "loadingDatasets"
+  | "noWFSAvailable";
 
 // English translations
 export const enTranslations: Record<TranslationKey, string> = {
@@ -558,8 +559,9 @@ export const enTranslations: Record<TranslationKey, string> = {
   imprint: "Imprint",
   previous: "Previous",
   next: "Next",
-  onlyWMSavailable: "only available as WMS",
+  onlyWMSavailable: "only available as WMS: ",
   loadingDatasets: "loading external Datasets",
+  noWFSAvailable: "no WFS available"
 };
 
 // German translations
@@ -865,6 +867,7 @@ export const deTranslations: Record<TranslationKey, string> = {
   imprint: "Impressum",
   previous: "Zurück",
   next: "Nächstes",
-  onlyWMSavailable: "nur als WMS verfügbar",
+  onlyWMSavailable: "nur als WMS verfügbar: ",
   loadingDatasets: "externe Daten werden geladen",
+  noWFSAvailable: "kein WFS verfügbar"
 };

@@ -46,14 +46,13 @@ The WFS Explorer can be preconfigured via URL parameters. This makes it easy to 
 - `filters`  
   A URL-encoded JSON array of filter objects that should be applied when the dataset is loaded.  
   Each filter object contains:
-
   - `attribute`: the field name
   - `operator`: the comparison operator
   - `value`: the filter value
 
 - `datasets`  
-  The URL to a `services-internet.json` file, as used by the Masterportal software.  
-  All datasets listed in this JSON file are added to the search. If an entry is a WMS, the application also checks whether a corresponding WFS is available and can be used.
+  The URL to a `services-internet.json` file, as used by the [Masterportal](https://bitbucket.org/geowerkstatt-hamburg/masterportal/src) software. All datasets listed in this JSON file are added to the search. If an entry is a WMS, the application also checks whether a corresponding WFS is available. Example which loads the services from Berlins Masterportal:
+  - https://wfsexplorer.odis-berlin.de/?datasets=https://gdi.berlin.de/viewer/_shared/resources/services-internet.json
 
 ### About Web Feature Service (WFS)
 
