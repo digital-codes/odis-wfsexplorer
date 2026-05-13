@@ -9,7 +9,7 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { X, Plus, Trash2 } from "lucide-react";
@@ -24,7 +24,7 @@ const STRING_OPERATORS = [
   { value: "startsWith", label: "Starts With" },
   { value: "endsWith", label: "Ends With" },
   { value: "isEmpty", label: "Is Empty" },
-  { value: "isNotEmpty", label: "Is Not Empty" },
+  { value: "isNotEmpty", label: "Is Not Empty" }
 ];
 
 const NUMBER_OPERATORS = [
@@ -36,12 +36,12 @@ const NUMBER_OPERATORS = [
   { value: "lessThanOrEqual", label: "Less Than or Equal" },
   { value: "between", label: "Between" },
   { value: "isNull", label: "Is Null" },
-  { value: "isNotNull", label: "Is Not Null" },
+  { value: "isNotNull", label: "Is Not Null" }
 ];
 
 const BOOLEAN_OPERATORS = [
   { value: "equals", label: "Equals" },
-  { value: "notEquals", label: "Not Equals" },
+  { value: "notEquals", label: "Not Equals" }
 ];
 
 const DATE_OPERATORS = [
@@ -51,7 +51,7 @@ const DATE_OPERATORS = [
   { value: "after", label: "After" },
   { value: "between", label: "Between" },
   { value: "isNull", label: "Is Null" },
-  { value: "isNotNull", label: "Is Not Null" },
+  { value: "isNotNull", label: "Is Not Null" }
 ];
 
 // Define filter condition interface
@@ -76,7 +76,7 @@ export function AttributeFilter({
   attributes,
   onFilterChange,
   onActiveFiltersChange,
-  initialFilters = [],
+  initialFilters = []
 }: AttributeFilterProps) {
   const [filterConditions, setFilterConditions] = useState<FilterCondition[]>(
     []
@@ -231,7 +231,7 @@ export function AttributeFilter({
     // Create filtered data object
     const filteredData = {
       ...data,
-      features: filteredFeatures,
+      features: filteredFeatures
     };
 
     // Update filtered count and active filters
@@ -250,16 +250,18 @@ export function AttributeFilter({
     filterConditions,
     attributeTypes,
     onFilterChange,
-    onActiveFiltersChange,
+    onActiveFiltersChange
   ]);
 
   // Reset filters when data changes completely (new layer loaded)
+  const isFirstDataLoad = useRef(true);
   useEffect(() => {
     if (!data) {
       setFilterConditions([]);
       setActiveFilters([]);
       setFilteredCount(null);
       previousDataRef.current = null;
+      isFirstDataLoad.current = true;
       return;
     }
 
@@ -271,10 +273,14 @@ export function AttributeFilter({
     // Re-apply existing filters to the new data
     if (filterConditions.length > 0) {
       applyFilters();
-    } else {
-      // Pass the original data when no filters exist
+    } else if (!isFirstDataLoad.current) {
+      // Only call onFilterChange with empty filters if this is NOT the first data load
+      // On first load, we wait for initialFilters to be applied
       onFilterChange(data, []);
     }
+
+    // Mark that we've had the first data load
+    isFirstDataLoad.current = false;
 
     // Generate suggestions for all attributes
     if (data && data.features && data.features.length > 0) {
@@ -294,7 +300,7 @@ export function AttributeFilter({
       id: `filter-${Date.now()}`,
       attribute: attributes[0] || "",
       operator: "equals",
-      value: "",
+      value: ""
     };
     setFilterConditions([...filterConditions, newCondition]);
   };
@@ -336,7 +342,7 @@ export function AttributeFilter({
               [field]: value,
               operator: defaultOperator,
               value: "",
-              value2: undefined,
+              value2: undefined
             };
           }
 
@@ -349,7 +355,7 @@ export function AttributeFilter({
               ...condition,
               [field]: value,
               value: "",
-              value2: undefined,
+              value2: undefined
             };
           }
 
@@ -358,7 +364,7 @@ export function AttributeFilter({
             return {
               ...condition,
               [field]: value,
-              value2: "",
+              value2: ""
             };
           }
 
@@ -409,16 +415,35 @@ export function AttributeFilter({
     }
   };
 
+  // Reset hasAppliedInitialFilters when initialFilters changes
+  useEffect(() => {
+    if (initialFilters.length > 0) {
+      console.log(
+        "Resetting hasAppliedInitialFilters, new filters:",
+        initialFilters
+      );
+      hasAppliedInitialFilters.current = false;
+    }
+  }, [initialFilters]);
+
   useEffect(() => {
     if (!initialFilters.length || !data || !attributes.length) return;
     if (hasAppliedInitialFilters.current) return;
+
+    console.log("Applying initial filters from URL:", initialFilters);
+    console.log("Available attributes:", attributes);
 
     const normalizedFilters = initialFilters
       .filter((condition) => attributes.includes(condition.attribute))
       .map((condition, index) => ({
         ...condition,
-        id: condition.id || `filter-${Date.now()}-${index}`,
+        id: condition.id || `filter-${Date.now()}-${index}`
       }));
+
+    console.log(
+      "Normalized filters (after attribute check):",
+      normalizedFilters
+    );
 
     if (normalizedFilters.length === 0) {
       hasAppliedInitialFilters.current = true;
@@ -597,8 +622,8 @@ export function AttributeFilter({
                         attributeTypes[condition.attribute] === "number"
                           ? "number"
                           : attributeTypes[condition.attribute] === "date"
-                          ? "date"
-                          : "text"
+                            ? "date"
+                            : "text"
                       }
                       list={`suggestions-${condition.id}`}
                     />
@@ -635,8 +660,8 @@ export function AttributeFilter({
                             attributeTypes[condition.attribute] === "number"
                               ? "number"
                               : attributeTypes[condition.attribute] === "date"
-                              ? "date"
-                              : "text"
+                                ? "date"
+                                : "text"
                           }
                           list={`suggestions2-${condition.id}`}
                         />
