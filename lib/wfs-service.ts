@@ -9,6 +9,8 @@ const UNSUPPORTED_FORMAT_PREVIEW_LENGTH = 200;
 // Supported WFS versions, ordered by preference
 const SUPPORTED_WFS_VERSIONS = ["2.0.0", "1.1.0", "1.0.0"] as const;
 
+import { reprojectBbox, normalizeProjectionCode } from "@/lib/geo-utils";
+
 export interface LayerInfo {
   id: string;
   title: string;
@@ -365,6 +367,13 @@ function buildDescribeFeatureTypeParams(options: {
   return params;
 }
 
+export interface BBoxFilter {
+  minx: number;
+  miny: number;
+  maxx: number;
+  maxy: number;
+}
+
 function buildGetFeatureParams(options: {
   version?: string;
   layerId: string;
@@ -373,6 +382,8 @@ function buildGetFeatureParams(options: {
   srsName?: string;
   resultType?: "results" | "hits";
   namespaceUri?: string;
+  bbox?: BBoxFilter;
+  layerProjections?: string[];
 }): URLSearchParams {
   const version = options.version || "2.0.0";
 
@@ -405,6 +416,64 @@ function buildGetFeatureParams(options: {
 
   if (options.srsName) {
     params.set("srsName", options.srsName);
+  }
+
+  // Add BBOX parameter if provided
+  // BBOX coordinates from the UI are always in WGS84 (EPSG:4326)
+  // We prefer to use WGS84 for the bbox, but fall back to the layer's native projection if needed
+  if (options.bbox && options.layerProjections) {
+    let bboxToUse = options.bbox;
+    let bboxCrs = "EPSG:4326";
+
+    // Check if layer supports WGS84
+    const normalizedProjections = options.layerProjections.map(p => normalizeProjectionCode(p));
+    const supportsWGS84 = normalizedProjections.some(p => 
+      p === "EPSG:4326" || p === "CRS:84"
+    );
+
+    // If layer doesn't support WGS84, reproject bbox to the layer's srsName
+    if (!supportsWGS84 && options.srsName) {
+      const targetCrs = normalizeProjectionCode(options.srsName);
+      const reprojectedBbox = reprojectBbox(options.bbox, "EPSG:4326", targetCrs);
+      
+      if (reprojectedBbox) {
+        bboxToUse = reprojectedBbox;
+        bboxCrs = targetCrs;
+        console.log(`Layer doesn't support WGS84, reprojected bbox to ${targetCrs}:`, reprojectedBbox);
+      } else {
+        console.warn(`Could not reproject bbox to ${targetCrs}, trying WGS84 anyway`);
+      }
+    }
+
+    const { minx, miny, maxx, maxy } = bboxToUse;
+    
+    // WFS bbox format depends on version and CRS
+    if (isWfs2(version)) {
+      // WFS 2.0: For geographic CRS (4326), use lat/lon order; for projected CRS, use x/y order
+      const isGeographic = bboxCrs === "EPSG:4326" || bboxCrs === "CRS:84";
+      const crsUrn = bboxCrs.startsWith("EPSG:") 
+        ? `urn:ogc:def:crs:EPSG::${bboxCrs.split(":")[1]}`
+        : bboxCrs;
+      
+      if (isGeographic) {
+        // Geographic: lat/lon order (miny, minx, maxy, maxx)
+        params.set("bbox", `${miny},${minx},${maxy},${maxx},${crsUrn}`);
+      } else {
+        // Projected: x/y order (minx, miny, maxx, maxy)
+        params.set("bbox", `${minx},${miny},${maxx},${maxy},${crsUrn}`);
+      }
+    } else {
+      // WFS 1.x: Always uses x/y order (minx, miny, maxx, maxy)
+      params.set("bbox", `${minx},${miny},${maxx},${maxy},${bboxCrs}`);
+    }
+  } else if (options.bbox) {
+    // No layer projections info available, default to WGS84
+    const { minx, miny, maxx, maxy } = options.bbox;
+    if (isWfs2(version)) {
+      params.set("bbox", `${miny},${minx},${maxy},${maxx},urn:ogc:def:crs:EPSG::4326`);
+    } else {
+      params.set("bbox", `${minx},${miny},${maxx},${maxy},EPSG:4326`);
+    }
   }
 
   if (
@@ -889,7 +958,8 @@ export async function fetchWfsData(
   baseUrl: string,
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
-  layer?: LayerInfo
+  layer?: LayerInfo,
+  bbox?: BBoxFilter
 ) {
   const versions = getEffectiveVersions(baseUrl, layer);
 
@@ -911,7 +981,9 @@ export async function fetchWfsData(
         outputFormat,
         maxFeatures: effectiveMaxFeatures,
         srsName: sourceProjection,
-        namespaceUri: layer?.namespaceUri
+        namespaceUri: layer?.namespaceUri,
+        bbox,
+        layerProjections: layer?.projections
       });
 
       const requestUrl = createRequestUrl(baseUrl, params);
@@ -1353,16 +1425,23 @@ function coerceValue(value: string): unknown {
 export async function fetchFeatureCount(
   baseUrl: string,
   layerId: string,
-  layer?: LayerInfo
+  layer?: LayerInfo,
+  bbox?: BBoxFilter
 ): Promise<number> {
   return tryAcrossVersions(
     getEffectiveVersions(baseUrl, layer),
     async (version) => {
+      const sourceProjection =
+        layer?.defaultProjection || layer?.projections?.[0] || undefined;
+      
       const params = buildGetFeatureParams({
         version,
         layerId,
         resultType: "hits",
-        namespaceUri: layer?.namespaceUri
+        namespaceUri: layer?.namespaceUri,
+        bbox,
+        srsName: sourceProjection,
+        layerProjections: layer?.projections
       });
 
       const requestUrl = createRequestUrl(baseUrl, params);
@@ -1424,7 +1503,8 @@ export async function fetchWfsDataForDownload(
   layerId: string,
   maxFeatures: number = DEFAULT_MAX_FEATURES,
   layer?: LayerInfo,
-  useNativeProjection = false
+  useNativeProjection = false,
+  bbox?: BBoxFilter
 ): Promise<string> {
   const requestLayer =
     !useNativeProjection && layer?.projections?.includes("EPSG:4326")
@@ -1438,7 +1518,8 @@ export async function fetchWfsDataForDownload(
     baseUrl,
     layerId,
     maxFeatures,
-    requestLayer
+    requestLayer,
+    bbox
   );
 
   return JSON.stringify(data, null, 2);

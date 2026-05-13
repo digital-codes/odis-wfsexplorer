@@ -39,13 +39,18 @@ import {
   fetchWfsCapabilities,
   fetchWfsData,
   fetchFeatureCount,
-  type LayerInfo
+  type LayerInfo,
+  type BBoxFilter
 } from "@/lib/wfs-service";
 import { LayerSelector } from "@/components/layer-selector";
 import { FeatureCountSelector } from "@/components/feature-count-selector";
 import { AttributeExplorer } from "@/components/attribute-explorer";
 import { AttributeStats } from "@/components/attribute-stats";
-import { AttributeFilter } from "@/components/attribute-filter";
+import {
+  AttributeFilter,
+  type FilterCondition
+} from "@/components/attribute-filter";
+import { BboxFilter } from "@/components/bbox-filter";
 import { DownloadOptions } from "@/components/download-options";
 import { DownloadFilteredOptions } from "@/components/download-filtered-options";
 import dynamic from "next/dynamic";
@@ -127,8 +132,11 @@ export default function WfsAnalyzer() {
   const [errorType, setErrorType] = useState<
     "network" | "auth" | "notFound" | "badRequest" | "server" | "unknown" | null
   >(null);
-  const [activeFilters, setActiveFilters] = useState<any[]>([]);
+  const [activeFilters, setActiveFilters] = useState<FilterCondition[]>([]);
+  const [bboxFilter, setBboxFilter] = useState<BBoxFilter | null>(null);
+  const [initialFilters, setInitialFilters] = useState<FilterCondition[]>([]);
   const [searchDatasets, setSearchDatasets] = useState<SearchDataset[]>([]);
+  const lastAnalyzedUrlRef = useRef<string | null>(null);
   const [datasetsParamUrl, setDatasetsParamUrl] = useState<string | null>(null);
   const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
   const [datasetsError, setDatasetsError] = useState<string | null>(null);
@@ -149,6 +157,58 @@ export default function WfsAnalyzer() {
   const datasetListRef = useRef<HTMLDivElement>(null);
   const datasetItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const datasetDropdownWrapperRef = useRef<HTMLDivElement>(null);
+
+  // Helper function to update filters in URL
+  const updateFiltersParameter = (filters: FilterCondition[]) => {
+    if (typeof window === "undefined") return;
+
+    console.log("updateFiltersParameter called with:", filters);
+    console.trace("updateFiltersParameter stack trace");
+
+    const newUrl = new URL(window.location.href);
+
+    if (!filters.length) {
+      newUrl.searchParams.delete("filters");
+    } else {
+      const serializedFilters = JSON.stringify(
+        filters.map(({ attribute, operator, value, value2 }) => ({
+          attribute,
+          operator,
+          value,
+          ...(value2 ? { value2 } : {})
+        }))
+      );
+      newUrl.searchParams.set("filters", serializedFilters);
+    }
+
+    window.history.pushState(
+      { path: newUrl.toString() },
+      "",
+      newUrl.toString()
+    );
+  };
+
+  // Helper function to parse filters from URL
+  const parseFiltersParameter = (value: string | null): FilterCondition[] => {
+    console.log("parseFiltersParameter input:", value);
+    if (!value) return [];
+    try {
+      const parsed = JSON.parse(value);
+      console.log("parseFiltersParameter parsed:", parsed);
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed.map((filter: Partial<FilterCondition>, index: number) => ({
+        id: filter.id || `filter-url-${Date.now()}-${index}`,
+        attribute: String(filter.attribute || ""),
+        operator: String(filter.operator || "equals"),
+        value: String(filter.value || ""),
+        value2: filter.value2 ? String(filter.value2) : undefined
+      }));
+    } catch (error) {
+      console.warn("Unable to parse filters from URL parameter.", error);
+      return [];
+    }
+  };
 
   const getTextByLocalName = (parent: Element, localName: string) => {
     const node = Array.from(parent.getElementsByTagName("*")).find(
@@ -412,12 +472,42 @@ export default function WfsAnalyzer() {
       const params = new URLSearchParams(window.location.search);
       const wfsParam = params.get("wfs");
       const datasetsParam = params.get("datasets");
+      const filtersParam = params.get("filters");
+      const bboxParam = params.get("bbox");
 
       if (wfsParam) {
         console.log("Loading WFS from URL parameter:", wfsParam);
         setWfsUrl(wfsParam);
+
+        // Parse filters from URL
+        const parsedFilters = parseFiltersParameter(filtersParam);
+        console.log("Parsed filters from URL:", parsedFilters);
+        if (parsedFilters.length > 0) {
+          console.log("Setting initialFilters to:", parsedFilters);
+          setInitialFilters(parsedFilters);
+          // Mark that we're applying initial filters - will be cleared after first filter apply
+          isApplyingInitialFilters.current = true;
+        }
+
+        // Parse bbox from URL (format: minx,miny,maxx,maxy)
+        let parsedBbox: BBoxFilter | null = null;
+        if (bboxParam) {
+          const parts = bboxParam.split(",").map(Number);
+          if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
+            console.log("Parsed bbox from URL:", parts);
+            parsedBbox = {
+              minx: parts[0],
+              miny: parts[1],
+              maxx: parts[2],
+              maxy: parts[3]
+            };
+            setBboxFilter(parsedBbox);
+          }
+        }
+
+        // Pass parsed values directly to avoid stale state issues
         setTimeout(() => {
-          analyzeWfsUrl(wfsParam);
+          analyzeWfsUrl(wfsParam, parsedBbox, parsedFilters);
         }, 0);
       }
 
@@ -462,8 +552,15 @@ export default function WfsAnalyzer() {
   }, [filteredDatasets]);
 
   // Handle auto-selecting layer from URL param on initial load
+  // Also handles single-layer WFS when bbox/filters need to be applied
   const urlLayerLoadedRef = useRef(false);
   useEffect(() => {
+    console.log('Layer load effect running:', {
+      urlLayerLoadedRef: urlLayerLoadedRef.current,
+      availableLayersLength: availableLayers.length,
+      bboxFilter,
+      initialFiltersLength: initialFilters.length
+    });
     if (
       typeof window !== "undefined" &&
       !urlLayerLoadedRef.current &&
@@ -471,6 +568,8 @@ export default function WfsAnalyzer() {
     ) {
       const params = new URLSearchParams(window.location.search);
       const wfsLayer = params.get("layer");
+
+      let layerToLoad: LayerInfo | null = null;
 
       if (wfsLayer) {
         // Try exact match first
@@ -487,15 +586,30 @@ export default function WfsAnalyzer() {
         }
 
         if (layerFound) {
-          urlLayerLoadedRef.current = true;
-          setTimeout(() => {
-            setSelectedLayer(layerFound);
-            fetchLayerData(layerFound);
-          }, 0);
+          layerToLoad = layerFound;
         }
+      } else if (
+        availableLayers.length === 1 &&
+        (bboxFilter || initialFilters.length > 0)
+      ) {
+        // Single layer WFS with bbox/filters from URL - need to fetch with the filters applied
+        layerToLoad = availableLayers[0];
+        console.log('Single layer with bbox/filters, will load layer:', layerToLoad?.id);
+      }
+
+      if (layerToLoad) {
+        urlLayerLoadedRef.current = true;
+        const layer = layerToLoad;
+        const bboxToUse = bboxFilter; // Capture in closure
+        console.log('Setting urlLayerLoadedRef=true, scheduling fetch with bbox:', bboxToUse);
+        setTimeout(() => {
+          setSelectedLayer(layer);
+          // Use captured bboxFilter value
+          fetchLayerDataWithMaxFeatures(layer, maxFeatures, wfsUrl, bboxToUse);
+        }, 0);
       }
     }
-  }, [availableLayers]);
+  }, [availableLayers, bboxFilter, initialFilters.length]);
 
   // Handle auto-selecting layer from pending layer name (from datasets selection)
   useEffect(() => {
@@ -564,21 +678,26 @@ export default function WfsAnalyzer() {
 
   // Update URL when WFS is selected
   const updateUrlParameter = (url: string) => {
+    if (url === "") {
+      if (typeof window !== "undefined") {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete("wfs");
+        newUrl.searchParams.delete("layer");
+        newUrl.searchParams.delete("bbox");
+        newUrl.searchParams.delete("filters");
+
+        window.history.pushState(
+          { path: newUrl.toString() },
+          "",
+          newUrl.toString()
+        );
+      }
+      return;
+    }
+
     if (typeof window !== "undefined") {
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set("wfs", url);
-      window.history.pushState(
-        { path: newUrl.toString() },
-        "",
-        newUrl.toString()
-      );
-    }
-
-    if (url === "") {
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.delete("wfs");
-      newUrl.searchParams.delete("layer");
-
       window.history.pushState(
         { path: newUrl.toString() },
         "",
@@ -632,17 +751,27 @@ export default function WfsAnalyzer() {
   };
 
   // Function to analyze a WFS URL
-  const analyzeWfsUrl = async (url: string) => {
+  // urlBbox and urlFilters are passed from initial URL parsing to avoid stale state issues
+  const analyzeWfsUrl = async (url: string, urlBbox?: BBoxFilter | null, urlFilters?: AttributeFilter[]) => {
     if (!url.trim()) {
       setError(t("enterWfsUrl"));
       setErrorType("unknown");
       return;
     }
 
+    const nextUrl = url.trim();
+    const isWfsChange =
+      lastAnalyzedUrlRef.current !== null &&
+      lastAnalyzedUrlRef.current !== nextUrl;
+    
+    // Use passed values (for initial load) or current state (for subsequent calls)
+    const hasBboxFromUrl = urlBbox !== undefined ? !!urlBbox : !!bboxFilter;
+    const hasFiltersFromUrl = urlFilters !== undefined ? urlFilters.length > 0 : initialFilters.length > 0;
+
     // Reset all states
     setError(null);
     setErrorType(null);
-    setAnalyzedUrl(url.trim());
+    setAnalyzedUrl(nextUrl);
     setIsLoadingLayers(true);
     setAvailableLayers([]);
     setSelectedLayer(null);
@@ -657,7 +786,26 @@ export default function WfsAnalyzer() {
     setFocusedFeature(null);
     setSupportsJsonFormat(true);
 
-    // Update URL parameter
+    // Clear filters and bbox when WFS changes (not on initial load)
+    if (isWfsChange) {
+      setBboxFilter(null);
+      setActiveFilters([]);
+      setInitialFilters([]);
+      updateFiltersParameter([]);
+      // Clear bbox from URL
+      if (typeof window !== "undefined") {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete("bbox");
+        newUrl.searchParams.delete("filters");
+        window.history.pushState(
+          { path: newUrl.toString() },
+          "",
+          newUrl.toString()
+        );
+      }
+    }
+
+    // Update URL parameter (only set wfs param, don't touch others)
     updateUrlParameter(url);
 
     const cleanUrl = sanitizeWfsUrl(url);
@@ -673,7 +821,15 @@ export default function WfsAnalyzer() {
       } else if (layers.length === 1) {
         // If only one layer, select it automatically
         setSelectedLayer(layers[0]);
-        await fetchLayerData(layers[0], cleanUrl);
+        // Only auto-fetch if we don't have bbox/filters from URL that need to be applied
+        // (those will be handled by the layer auto-select effect after state updates)
+        console.log('analyzeWfsUrl: single layer, hasBboxFromUrl:', hasBboxFromUrl, 'hasFiltersFromUrl:', hasFiltersFromUrl);
+        if (!hasBboxFromUrl && !hasFiltersFromUrl) {
+          console.log('analyzeWfsUrl: calling fetchLayerData (no URL params)');
+          await fetchLayerData(layers[0], cleanUrl);
+        } else {
+          console.log('analyzeWfsUrl: NOT calling fetchLayerData (will let effect handle with bbox/filters)');
+        }
       }
       // If multiple layers, wait for user selection
     } catch (err) {
@@ -694,6 +850,7 @@ export default function WfsAnalyzer() {
         setErrorType("unknown");
       }
     } finally {
+      lastAnalyzedUrlRef.current = nextUrl;
       setIsLoadingLayers(false);
     }
   };
@@ -928,8 +1085,14 @@ export default function WfsAnalyzer() {
 
   // Update the fetchLayerData function to properly pass the URL to fetchLayerDataWithMaxFeatures
   const fetchLayerData = async (layer: LayerInfo, urlOverride?: string) => {
+    console.log('fetchLayerData called, current bboxFilter state:', bboxFilter);
     const urlToUse = urlOverride || wfsUrl;
-    await fetchLayerDataWithMaxFeatures(layer, maxFeatures, urlToUse);
+    await fetchLayerDataWithMaxFeatures(
+      layer,
+      maxFeatures,
+      urlToUse,
+      bboxFilter
+    );
   };
 
   // Update the handleLayerSelect function to ensure it properly fetches layer data
@@ -971,7 +1134,8 @@ export default function WfsAnalyzer() {
         await fetchLayerDataWithMaxFeatures(
           selectedLayer,
           newMaxFeatures,
-          wfsUrl
+          wfsUrl,
+          bboxFilter
         );
       } catch (error) {
         console.error("Error fetching data after max features change:", error);
@@ -990,8 +1154,11 @@ export default function WfsAnalyzer() {
   const fetchLayerDataWithMaxFeatures = async (
     layer: LayerInfo,
     maxFeaturesValue: number,
-    urlOverride?: string
+    urlOverride?: string,
+    bbox?: BBoxFilter | null
   ) => {
+    console.log('fetchLayerDataWithMaxFeatures called with bbox:', bbox);
+    console.trace('fetchLayerDataWithMaxFeatures stack trace');
     setIsLoading(true);
     setError(null);
     setErrorType(null);
@@ -1006,10 +1173,15 @@ export default function WfsAnalyzer() {
     const urlToUse = urlOverride || wfsUrl;
 
     try {
-      // First try to get the total feature count
+      // First try to get the total feature count (with bbox if provided)
       setIsLoadingCount(true);
       try {
-        const count = await fetchFeatureCount(urlToUse, layer.id);
+        const count = await fetchFeatureCount(
+          urlToUse,
+          layer.id,
+          layer,
+          bbox || undefined
+        );
         setTotalFeatureCount(count);
       } catch (countError) {
         console.error("Error fetching feature count:", countError);
@@ -1018,14 +1190,22 @@ export default function WfsAnalyzer() {
         setIsLoadingCount(false);
       }
 
-      // Then fetch the actual data with the provided maxFeatures limit
+      // Then fetch the actual data with the provided maxFeatures limit and bbox
       // Use the layer's default projection first, then convert to WGS84 if needed
-      console.log(`Fetching data with max features: ${maxFeaturesValue}`);
+      console.log(
+        `Fetching data with max features: ${maxFeaturesValue}${bbox ? ` and bbox filter` : ""}`
+      );
       const {
         data,
         attributes: fetchedAttributes,
         sourceProjection
-      } = await fetchWfsData(urlToUse, layer.id, maxFeaturesValue, layer);
+      } = await fetchWfsData(
+        urlToUse,
+        layer.id,
+        maxFeaturesValue,
+        layer,
+        bbox || undefined
+      );
 
       let detectedProjection = sourceProjection;
       if (data?.features && data?.features?.length) {
@@ -1090,8 +1270,14 @@ export default function WfsAnalyzer() {
     }
   };
 
+  // Track if we're applying initial filters (to avoid URL update loop)
+  const isApplyingInitialFilters = useRef(false);
+
   // Handle filter changes
-  const handleFilterChange = (newFilteredData: any, filters: any[]) => {
+  const handleFilterChange = (
+    newFilteredData: any,
+    filters: FilterCondition[]
+  ) => {
     if (newFilteredData && wfsData) {
       // Add total feature count to the filtered data
       newFilteredData.totalFeatures = wfsData.features.length;
@@ -1103,7 +1289,48 @@ export default function WfsAnalyzer() {
         wfsData &&
         newFilteredData.features.length !== wfsData.features.length
     );
-    setActiveFilters(filters);
+    const normalizedFilters = filters || [];
+    setActiveFilters(normalizedFilters);
+
+    // Only update URL if not applying initial filters from URL
+    if (!isApplyingInitialFilters.current) {
+      updateFiltersParameter(normalizedFilters);
+    } else {
+      // Clear the flag after initial filters have been applied
+      isApplyingInitialFilters.current = false;
+    }
+  };
+
+  // Handle bbox filter changes
+  const handleBboxChange = async (newBbox: BBoxFilter | null) => {
+    setBboxFilter(newBbox);
+
+    // Update URL params
+    if (typeof window !== "undefined") {
+      const newUrl = new URL(window.location.href);
+      if (newBbox) {
+        // Store bbox as minx,miny,maxx,maxy
+        const bboxParam = `${newBbox.minx},${newBbox.miny},${newBbox.maxx},${newBbox.maxy}`;
+        newUrl.searchParams.set("bbox", bboxParam);
+      } else {
+        newUrl.searchParams.delete("bbox");
+      }
+      window.history.pushState(
+        { path: newUrl.toString() },
+        "",
+        newUrl.toString()
+      );
+    }
+
+    // Refetch data with new bbox if we have a selected layer
+    if (selectedLayer) {
+      await fetchLayerDataWithMaxFeatures(
+        selectedLayer,
+        maxFeatures,
+        wfsUrl,
+        newBbox
+      );
+    }
   };
 
   // Handle example dataset selection
@@ -1136,9 +1363,16 @@ export default function WfsAnalyzer() {
   }, [wfsUrl]);
 
   // Clear previous data when switching between layers
+  const prevSelectedLayerRef = useRef<LayerInfo | null | undefined>(undefined);
   useEffect(() => {
-    if (selectedLayer === null) {
-      // Reset all data states when URL changes
+    // Only run cleanup when layer changes FROM a value TO null (not on initial load)
+    const wasLayerSelected =
+      prevSelectedLayerRef.current !== undefined &&
+      prevSelectedLayerRef.current !== null;
+    prevSelectedLayerRef.current = selectedLayer;
+
+    if (selectedLayer === null && wasLayerSelected) {
+      // Reset all data states when layer is deselected
       setWfsData(null);
       setFilteredData(null);
       setAttributes([]);
@@ -1150,6 +1384,21 @@ export default function WfsAnalyzer() {
       setFocusedFeature(null);
       setError(null);
       setErrorType(null);
+      setBboxFilter(null); // Reset bbox when layer changes
+      setActiveFilters([]); // Reset active filters when layer changes
+      setInitialFilters([]); // Reset initial filters when layer changes
+
+      // Clear bbox and filters from URL when layer is deselected
+      if (typeof window !== "undefined") {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete("bbox");
+        newUrl.searchParams.delete("filters");
+        window.history.pushState(
+          { path: newUrl.toString() },
+          "",
+          newUrl.toString()
+        );
+      }
     }
   }, [selectedLayer]);
 
@@ -2110,12 +2359,23 @@ export default function WfsAnalyzer() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
+                    {/* Bbox Filter */}
+                    <div className="mb-4 pb-4 border-b">
+                      <BboxFilter
+                        bbox={bboxFilter}
+                        onBboxChange={handleBboxChange}
+                        layerBounds={selectedLayer?.bounds}
+                      />
+                    </div>
+
+                    {/* Attribute Filter */}
                     <AttributeFilter
                       data={wfsData}
                       attributes={attributes}
                       onFilterChange={(newFilteredData, filters) =>
                         handleFilterChange(newFilteredData, filters)
                       }
+                      initialFilters={initialFilters}
                     />
                   </CardContent>
                 </Card>

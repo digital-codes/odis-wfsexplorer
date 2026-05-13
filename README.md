@@ -26,6 +26,8 @@ With the WFS Explorer, users can interactively explore individual WFS datasets. 
 
 - Attribute Filtering: A user-friendly filter allows datasets to be narrowed down based on specific attribute values.
 
+- Bounding Box Filtering: An interactive map interface allows users to draw a bounding box to filter features by geographic area. This is useful for focusing on a specific region of interest within a larger dataset.
+
 - Tabular Attribute View: A clean tabular overview of all attributes and an automatic summary of their contents help users explore and analyze the data—making it easy to understand what information is contained in the dataset.
 
 - GeoJSON Export: The dataset can be exported as a GeoJSON file using the widely supported WGS 84 projection (EPSG:4326), enabling seamless integration into other applications.
@@ -49,6 +51,10 @@ The WFS Explorer can be preconfigured via URL parameters. This makes it easy to 
   - `attribute`: the field name
   - `operator`: the comparison operator
   - `value`: the filter value
+
+- `bbox`  
+  A bounding box filter in the format `minx,miny,maxx,maxy` (WGS84 coordinates). When provided, only features within this geographic area are loaded.  
+  Example: `bbox=13.3,52.4,13.5,52.6`
 
 - `datasets`  
   The URL to a `services-internet.json` file, as used by the [Masterportal](https://bitbucket.org/geowerkstatt-hamburg/masterportal/src) software. All datasets listed in this JSON file are added to the search. If an entry is a WMS, the application also checks whether a corresponding WFS is available. Example which loads the services from Berlins Masterportal:

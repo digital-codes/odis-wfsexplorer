@@ -131,3 +131,49 @@ export function isLikelyWGS84(feature) {
 
   return checkCoordinates(geometry.coordinates);
 }
+
+// Reproject a bounding box from one CRS to another
+// Returns { minx, miny, maxx, maxy } in the target CRS
+export function reprojectBbox(
+  bbox: { minx: number; miny: number; maxx: number; maxy: number },
+  fromProj: string,
+  toProj: string
+): { minx: number; miny: number; maxx: number; maxy: number } | null {
+  const from = normalizeProjectionCode(fromProj);
+  const to = normalizeProjectionCode(toProj);
+
+  if (from === to) {
+    return bbox;
+  }
+
+  if (!proj4.defs[from] || !proj4.defs[to]) {
+    console.error(`Missing projection defs for ${from} or ${to}`);
+    return null;
+  }
+
+  try {
+    // Reproject the four corners and find the new extent
+    // This handles potential rotation/skew in the transformation
+    const corners = [
+      [bbox.minx, bbox.miny], // SW
+      [bbox.minx, bbox.maxy], // NW
+      [bbox.maxx, bbox.miny], // SE
+      [bbox.maxx, bbox.maxy], // NE
+    ];
+
+    const reprojectedCorners = corners.map((coord) => proj4(from, to, coord));
+
+    const xs = reprojectedCorners.map((c) => c[0]);
+    const ys = reprojectedCorners.map((c) => c[1]);
+
+    return {
+      minx: Math.min(...xs),
+      miny: Math.min(...ys),
+      maxx: Math.max(...xs),
+      maxy: Math.max(...ys),
+    };
+  } catch (error) {
+    console.error(`Error reprojecting bbox from ${from} to ${to}:`, error);
+    return null;
+  }
+}
