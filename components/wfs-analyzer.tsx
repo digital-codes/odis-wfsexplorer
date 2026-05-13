@@ -105,7 +105,7 @@ export default function WfsAnalyzer() {
   const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
   const [selectedLayer, setSelectedLayer] = useState<LayerInfo | null>(null);
   const [isLoadingLayers, setIsLoadingLayers] = useState(false);
-  const [maxFeatures, setMaxFeatures] = useState(50);
+  const [maxFeatures, setMaxFeatures] = useState(500);
   const [totalFeatureCount, setTotalFeatureCount] = useState<number | null>(
     null
   );

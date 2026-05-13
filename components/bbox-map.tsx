@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 // @ts-ignore - leaflet types not installed
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -37,6 +37,10 @@ export default function BboxMap({
   }>({ isDrawing: false, startLatLng: null });
   const tempRectangleRef = useRef<any>(null);
 
+  // Use ref for callback to avoid re-creating map when callback changes
+  const onBboxChangeRef = useRef(onBboxChange);
+  onBboxChangeRef.current = onBboxChange;
+
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
@@ -59,7 +63,7 @@ export default function BboxMap({
     });
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
+      attribution: "&copy; OpenStreetMap contributors"
     }).addTo(map);
 
     // Invalidate size after a short delay to ensure proper rendering in dialog
@@ -67,15 +71,7 @@ export default function BboxMap({
       map.invalidateSize();
     }, 100);
 
-    // Fit to layer bounds if available
-    if (layerBounds) {
-      map.fitBounds([
-        [layerBounds.miny, layerBounds.minx],
-        [layerBounds.maxy, layerBounds.maxx]
-      ]);
-    }
-
-    // If there's an existing bbox, display it
+    // Fit to initial bbox if available, otherwise fit to layer bounds
     if (initialBbox) {
       const rect = L.rectangle(
         [
@@ -90,6 +86,11 @@ export default function BboxMap({
       ).addTo(map);
       rectangleRef.current = rect;
       map.fitBounds(rect.getBounds(), { padding: [50, 50] });
+    } else if (layerBounds) {
+      map.fitBounds([
+        [layerBounds.miny, layerBounds.minx],
+        [layerBounds.maxy, layerBounds.maxx]
+      ]);
     }
 
     // Mouse events for drawing rectangle
@@ -170,8 +171,11 @@ export default function BboxMap({
 
       rectangleRef.current = rect;
 
-      // Notify parent of new bbox
-      onBboxChange({
+      // Fit map to the new bbox with padding and animation
+      map.flyToBounds(bounds, { padding: [50, 50], duration: 1.5 });
+
+      // Notify parent of new bbox (use ref to avoid dependency issues)
+      onBboxChangeRef.current({
         minx: bounds.getWest(),
         miny: bounds.getSouth(),
         maxx: bounds.getEast(),
@@ -190,16 +194,7 @@ export default function BboxMap({
         drawingRef.current = { isDrawing: false, startLatLng: null };
       }
     };
-  }, [layerBounds, initialBbox, onBboxChange]);
-
-  // Function to clear the rectangle (exposed via parent's clear button)
-  const clearRectangle = () => {
-    if (mapInstanceRef.current && rectangleRef.current) {
-      mapInstanceRef.current.removeLayer(rectangleRef.current);
-      rectangleRef.current = null;
-    }
-    onBboxChange(null);
-  };
+  }, [layerBounds, initialBbox]); // Removed onBboxChange from deps
 
   return (
     <div

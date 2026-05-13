@@ -65,6 +65,7 @@ export type TranslationKey =
   | "loadingMap"
   | "attributeFilters"
   | "activeFilters"
+  | "activeFilter"
   | "clearAll"
   | "clear"
   | "filterCondition"
@@ -351,6 +352,7 @@ export const enTranslations: Record<TranslationKey, string> = {
   loadingMap: "Loading map...",
   attributeFilters: "Attribute Filters",
   activeFilters: "Active Filters:",
+  activeFilter: "Active Filters:",
   clearAll: "Clear All",
   clear: "Clear",
   filterCondition: "Filter Condition",
@@ -666,6 +668,7 @@ export const deTranslations: Record<TranslationKey, string> = {
   loadingMap: "Lade Karte...",
   attributeFilters: "Attributfilter",
   activeFilters: "Aktive Filter:",
+  activeFilter: "Aktiver Filter:",
   clearAll: "Alle löschen",
   clear: "löschen",
   filterCondition: "Filterbedingung",

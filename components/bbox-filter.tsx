@@ -89,7 +89,7 @@ export function BboxFilter({
       {/* Active bbox filter display - similar to activeFilters in attribute-filter */}
       {bbox && (
         <div className="bg-muted p-3 rounded-md">
-          <div className="text-sm font-medium mb-2">{t("activeFilters")}</div>
+          <div className="text-sm font-medium mb-2">{t("activeFilter")}</div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="flex items-center gap-1">
               {t("boundingBox")}: {t("SW")}: [{formatCoordinate(bbox.minx)},{" "}
