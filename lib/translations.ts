@@ -66,6 +66,7 @@ export type TranslationKey =
   | "attributeFilters"
   | "activeFilters"
   | "clearAll"
+  | "clear"
   | "filterCondition"
   | "attribute"
   | "operator"
@@ -120,7 +121,6 @@ export type TranslationKey =
   | "english"
   | "german"
   | "total"
-  | "loadingMap"
   | "projectionError"
   | "projectionErrorDesc"
   | "projectionWarning"
@@ -246,12 +246,10 @@ export type TranslationKey =
   | "downloadFullDataset"
   | "projectionFormat"
   | "totalAvailable"
-  | "downloadGeoJSON"
   | "filteredFeatureCount"
   | "projectionNote"
   | "applyFiltersFirst"
   | "filters"
-  | "downloadFilteredGeoJSON"
   | "matchYourFilters"
   | "projectBy"
   | "conductedBy"
@@ -267,7 +265,21 @@ export type TranslationKey =
   | "onlyWMSavailable"
   | "noMatchSearch"
   | "loadingDatasets"
-  | "noWFSAvailable";
+  | "noWFSAvailable"
+  // Bbox filter translations
+  | "bboxFilter"
+  | "bboxActive"
+  | "clearBbox"
+  | "boundingBox"
+  | "selectBbox"
+  | "selectBboxDescription"
+  | "bboxDrawInstructions"
+  | "selectedBbox"
+  | "applyBbox"
+  | "cancel"
+  | "edit"
+  | "SW"
+  | "NE";
 
 // English translations
 export const enTranslations: Record<TranslationKey, string> = {
@@ -320,6 +332,7 @@ export const enTranslations: Record<TranslationKey, string> = {
   downloadDescription: "Download the WFS data as GeoJSON",
   downloading: "Downloading...",
   downloadGeoJSON: "Download GeoJSON",
+  downloadCSV: "Download CSV",
   downloadFilteredData: "Download Filtered Data",
   downloadFilteredDescription: "Download the filtered WFS data as GeoJSON",
   downloadFilteredGeoJSON: "Download Filtered GeoJSON",
@@ -339,6 +352,7 @@ export const enTranslations: Record<TranslationKey, string> = {
   attributeFilters: "Attribute Filters",
   activeFilters: "Active Filters:",
   clearAll: "Clear All",
+  clear: "Clear",
   filterCondition: "Filter Condition",
   attribute: "Attribute",
   operator: "Operator",
@@ -348,7 +362,7 @@ export const enTranslations: Record<TranslationKey, string> = {
   selectAttribute: "Select attribute",
   selectOperator: "Select operator",
   selectValue: "Select value",
-  addFilter: "Add Filter",
+  addFilter: "Add Attribute Filter",
   clear: "Clear",
   applyFilters: "Apply Filters",
   attributeExplorer: "Table",
@@ -394,7 +408,6 @@ export const enTranslations: Record<TranslationKey, string> = {
   english: "English",
   german: "German",
   total: "total",
-  loadingMap: "Loading map...",
 
   // Projection related translations
   projectionError: "Projection Error",
@@ -541,8 +554,6 @@ export const enTranslations: Record<TranslationKey, string> = {
   downloadFullDataset: "Download the complete dataset in GeoJSON format",
   projectionFormat: "Coordinate System",
   totalAvailable: "Total available",
-  downloadGeoJSON: "Download GeoJSON",
-  downloadCSV: "Download CSV",
   filteredFeatureCount: "{count} feature(s) match your filters",
   projectionNote: "Filtered data is exported in the WGS84 projection",
   applyFiltersFirst: "Apply filters to enable filtered data download",
@@ -561,7 +572,23 @@ export const enTranslations: Record<TranslationKey, string> = {
   next: "Next",
   onlyWMSavailable: "only available as WMS: ",
   loadingDatasets: "loading external Datasets",
-  noWFSAvailable: "no WFS available"
+  noWFSAvailable: "no WFS available",
+  // Bbox filter translations
+  bboxFilter: "Add Area Filter",
+  bboxActive: "Area filter active",
+  clearBbox: "Remove area filter",
+  boundingBox: "Bounding Box",
+  selectBbox: "Select Area Filter",
+  selectBboxDescription:
+    "Draw a rectangle on the map to filter features by geographic area. Only features within the selected area will be loaded.",
+  bboxDrawInstructions:
+    "Click and drag on the map to draw a rectangle. The filter will be applied to all WFS queries.",
+  selectedBbox: "Selected area",
+  applyBbox: "Apply Area Filter",
+  cancel: "Cancel",
+  edit: "Edit",
+  SW: "SW",
+  NE: "NE"
 };
 
 // German translations
@@ -640,6 +667,7 @@ export const deTranslations: Record<TranslationKey, string> = {
   attributeFilters: "Attributfilter",
   activeFilters: "Aktive Filter:",
   clearAll: "Alle löschen",
+  clear: "löschen",
   filterCondition: "Filterbedingung",
   attribute: "Attribut",
   operator: "Operator",
@@ -649,7 +677,7 @@ export const deTranslations: Record<TranslationKey, string> = {
   selectAttribute: "Attribut auswählen",
   selectOperator: "Operator auswählen",
   selectValue: "Wert auswählen",
-  addFilter: "Filter hinzufügen",
+  addFilter: "Attribut Filter hinzufügen",
   clear: "Löschen",
   applyFilters: "Filter anwenden",
   attributeExplorer: "Tabelle",
@@ -694,7 +722,6 @@ export const deTranslations: Record<TranslationKey, string> = {
   english: "Englisch",
   german: "Deutsch",
   total: "gesamt",
-  loadingMap: "Lade Karte...",
 
   // Projection related translations
   projectionError: "Projektionsfehler",
@@ -848,13 +875,11 @@ export const deTranslations: Record<TranslationKey, string> = {
     "Lade den vollständigen Datensatz im GeoJSON-Format herunter",
   projectionFormat: "Koordinatensystem",
   totalAvailable: "Insgesamt verfügbar",
-  downloadGeoJSON: "GeoJSON herunterladen",
   filteredFeatureCount: "{count} Features entsprechen Ihrer Filterung",
   projectionNote: "Gefilterte Daten werden in der WGS84 Projektion exportiert",
   applyFiltersFirst:
     "Wende einen Filter an, um den Download gefilterter Daten zu aktivieren",
   filters: "Filter",
-  downloadFilteredGeoJSON: "Gefiltertes GeoJSON herunterladen",
   matchYourFilters: "entsprechen Ihrer Filterung",
   // Footer translations
   projectBy: "Ein Projekt der",
@@ -869,5 +894,21 @@ export const deTranslations: Record<TranslationKey, string> = {
   next: "Nächstes",
   onlyWMSavailable: "nur als WMS verfügbar: ",
   loadingDatasets: "externe Daten werden geladen",
-  noWFSAvailable: "kein WFS verfügbar"
+  noWFSAvailable: "kein WFS verfügbar",
+  // Bbox filter translations
+  bboxFilter: "Nach Bereich filtern",
+  bboxActive: "Bereichsfilter aktiv",
+  clearBbox: "Bereichsfilter entfernen",
+  boundingBox: "Begrenzungsrahmen",
+  selectBbox: "Bereichsfilter auswählen",
+  selectBboxDescription:
+    "Zeichne ein Rechteck auf der Karte, um Features nach geografischem Bereich zu filtern. Nur Features innerhalb des ausgewählten Bereichs werden geladen.",
+  bboxDrawInstructions:
+    "Klicke und ziehe auf der Karte, um ein Rechteck zu zeichnen. Der Filter wird auf alle WFS-Abfragen angewendet.",
+  selectedBbox: "Ausgewählter Bereich",
+  applyBbox: "Bereichsfilter anwenden",
+  cancel: "Abbrechen",
+  edit: "Bearbeiten",
+  SW: "SW",
+  NE: "NO"
 };

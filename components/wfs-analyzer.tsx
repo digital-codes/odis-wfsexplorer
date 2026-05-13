@@ -39,13 +39,15 @@ import {
   fetchWfsCapabilities,
   fetchWfsData,
   fetchFeatureCount,
-  type LayerInfo
+  type LayerInfo,
+  type BBoxFilter
 } from "@/lib/wfs-service";
 import { LayerSelector } from "@/components/layer-selector";
 import { FeatureCountSelector } from "@/components/feature-count-selector";
 import { AttributeExplorer } from "@/components/attribute-explorer";
 import { AttributeStats } from "@/components/attribute-stats";
 import { AttributeFilter } from "@/components/attribute-filter";
+import { BboxFilter } from "@/components/bbox-filter";
 import { DownloadOptions } from "@/components/download-options";
 import { DownloadFilteredOptions } from "@/components/download-filtered-options";
 import dynamic from "next/dynamic";
@@ -103,7 +105,7 @@ export default function WfsAnalyzer() {
   const [availableLayers, setAvailableLayers] = useState<LayerInfo[]>([]);
   const [selectedLayer, setSelectedLayer] = useState<LayerInfo | null>(null);
   const [isLoadingLayers, setIsLoadingLayers] = useState(false);
-  const [maxFeatures, setMaxFeatures] = useState(500);
+  const [maxFeatures, setMaxFeatures] = useState(50);
   const [totalFeatureCount, setTotalFeatureCount] = useState<number | null>(
     null
   );
@@ -128,6 +130,7 @@ export default function WfsAnalyzer() {
     "network" | "auth" | "notFound" | "badRequest" | "server" | "unknown" | null
   >(null);
   const [activeFilters, setActiveFilters] = useState<any[]>([]);
+  const [bboxFilter, setBboxFilter] = useState<BBoxFilter | null>(null);
   const [searchDatasets, setSearchDatasets] = useState<SearchDataset[]>([]);
   const [datasetsParamUrl, setDatasetsParamUrl] = useState<string | null>(null);
   const [isDatasetsLoading, setIsDatasetsLoading] = useState(false);
@@ -656,6 +659,7 @@ export default function WfsAnalyzer() {
     setHasProjectionIssue(false);
     setFocusedFeature(null);
     setSupportsJsonFormat(true);
+    setBboxFilter(null); // Reset bbox when WFS changes
 
     // Update URL parameter
     updateUrlParameter(url);
@@ -929,7 +933,12 @@ export default function WfsAnalyzer() {
   // Update the fetchLayerData function to properly pass the URL to fetchLayerDataWithMaxFeatures
   const fetchLayerData = async (layer: LayerInfo, urlOverride?: string) => {
     const urlToUse = urlOverride || wfsUrl;
-    await fetchLayerDataWithMaxFeatures(layer, maxFeatures, urlToUse);
+    await fetchLayerDataWithMaxFeatures(
+      layer,
+      maxFeatures,
+      urlToUse,
+      bboxFilter
+    );
   };
 
   // Update the handleLayerSelect function to ensure it properly fetches layer data
@@ -971,7 +980,8 @@ export default function WfsAnalyzer() {
         await fetchLayerDataWithMaxFeatures(
           selectedLayer,
           newMaxFeatures,
-          wfsUrl
+          wfsUrl,
+          bboxFilter
         );
       } catch (error) {
         console.error("Error fetching data after max features change:", error);
@@ -990,7 +1000,8 @@ export default function WfsAnalyzer() {
   const fetchLayerDataWithMaxFeatures = async (
     layer: LayerInfo,
     maxFeaturesValue: number,
-    urlOverride?: string
+    urlOverride?: string,
+    bbox?: BBoxFilter | null
   ) => {
     setIsLoading(true);
     setError(null);
@@ -1006,10 +1017,15 @@ export default function WfsAnalyzer() {
     const urlToUse = urlOverride || wfsUrl;
 
     try {
-      // First try to get the total feature count
+      // First try to get the total feature count (with bbox if provided)
       setIsLoadingCount(true);
       try {
-        const count = await fetchFeatureCount(urlToUse, layer.id);
+        const count = await fetchFeatureCount(
+          urlToUse,
+          layer.id,
+          layer,
+          bbox || undefined
+        );
         setTotalFeatureCount(count);
       } catch (countError) {
         console.error("Error fetching feature count:", countError);
@@ -1018,14 +1034,22 @@ export default function WfsAnalyzer() {
         setIsLoadingCount(false);
       }
 
-      // Then fetch the actual data with the provided maxFeatures limit
+      // Then fetch the actual data with the provided maxFeatures limit and bbox
       // Use the layer's default projection first, then convert to WGS84 if needed
-      console.log(`Fetching data with max features: ${maxFeaturesValue}`);
+      console.log(
+        `Fetching data with max features: ${maxFeaturesValue}${bbox ? ` and bbox filter` : ""}`
+      );
       const {
         data,
         attributes: fetchedAttributes,
         sourceProjection
-      } = await fetchWfsData(urlToUse, layer.id, maxFeaturesValue, layer);
+      } = await fetchWfsData(
+        urlToUse,
+        layer.id,
+        maxFeaturesValue,
+        layer,
+        bbox || undefined
+      );
 
       let detectedProjection = sourceProjection;
       if (data?.features && data?.features?.length) {
@@ -1106,6 +1130,21 @@ export default function WfsAnalyzer() {
     setActiveFilters(filters);
   };
 
+  // Handle bbox filter changes
+  const handleBboxChange = async (newBbox: BBoxFilter | null) => {
+    setBboxFilter(newBbox);
+
+    // Refetch data with new bbox if we have a selected layer
+    if (selectedLayer) {
+      await fetchLayerDataWithMaxFeatures(
+        selectedLayer,
+        maxFeatures,
+        wfsUrl,
+        newBbox
+      );
+    }
+  };
+
   // Handle example dataset selection
   const handleSelectExampleDataset = (url: string) => {
     // First set the URL
@@ -1138,7 +1177,7 @@ export default function WfsAnalyzer() {
   // Clear previous data when switching between layers
   useEffect(() => {
     if (selectedLayer === null) {
-      // Reset all data states when URL changes
+      // Reset all data states when layer changes
       setWfsData(null);
       setFilteredData(null);
       setAttributes([]);
@@ -1150,6 +1189,7 @@ export default function WfsAnalyzer() {
       setFocusedFeature(null);
       setError(null);
       setErrorType(null);
+      setBboxFilter(null); // Reset bbox when layer changes
     }
   }, [selectedLayer]);
 
@@ -2110,6 +2150,16 @@ export default function WfsAnalyzer() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
+                    {/* Bbox Filter */}
+                    <div className="mb-4 pb-4 border-b">
+                      <BboxFilter
+                        bbox={bboxFilter}
+                        onBboxChange={handleBboxChange}
+                        layerBounds={selectedLayer?.bounds}
+                      />
+                    </div>
+
+                    {/* Attribute Filter */}
                     <AttributeFilter
                       data={wfsData}
                       attributes={attributes}

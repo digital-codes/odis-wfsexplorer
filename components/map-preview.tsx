@@ -28,7 +28,7 @@ export default function MapPreview({
   sourceProjection = "EPSG:4326",
   focusFeature,
   onClearFocus,
-  onFeatureClick,
+  onFeatureClick
 }: MapPreviewProps) {
   const { t } = useLanguage();
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -69,7 +69,7 @@ export default function MapPreview({
     mapInstance.current = map;
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
+      attribution: "&copy; OpenStreetMap contributors"
     }).addTo(map);
 
     map.on("click", () => {
@@ -90,7 +90,7 @@ export default function MapPreview({
 
     const processedGeoJson = {
       type: "FeatureCollection",
-      features: JSON.parse(JSON.stringify(validFeatures)),
+      features: JSON.parse(JSON.stringify(validFeatures))
     };
 
     // const normalizedProj = normalizeProjectionCode(sourceProjection);
@@ -108,7 +108,7 @@ export default function MapPreview({
           fillColor: "#4c68c7",
           color: "#4c68c7",
           weight: 1,
-          fillOpacity: 0.8,
+          fillOpacity: 0.8
         }),
       onEachFeature: (feature, layer) => {
         const popup = Object.entries(feature.properties || {})
@@ -118,7 +118,7 @@ export default function MapPreview({
         layer.on("click", () => {
           onFeatureClick?.(feature);
         });
-      },
+      }
     }).addTo(map);
 
     geoJsonLayerRef.current = layer;
@@ -170,7 +170,7 @@ export default function MapPreview({
           color: "#ffa39e",
           weight: 2,
           fillColor: "#ffa39e",
-          fillOpacity: 0.6,
+          fillOpacity: 0.6
         }).addTo(map);
 
         focusedFeatureLayerRef.current = highlightCircle;
@@ -181,8 +181,8 @@ export default function MapPreview({
             color: "#ffa39e",
             weight: 4,
             opacity: 1,
-            fillOpacity: 0.7,
-          },
+            fillOpacity: 0.7
+          }
         }).addTo(map);
 
         focusedFeatureLayerRef.current = highlighted;
@@ -201,7 +201,7 @@ export default function MapPreview({
           .join("<br>");
 
         const popup = L.popup({
-          offset: L.point(0, isPoint ? -30 : 0),
+          offset: L.point(0, isPoint ? -30 : 0)
         })
           .setLatLng(center)
           .setContent(popupContent)
@@ -239,7 +239,7 @@ export default function MapPreview({
     <div
       ref={mapContainer}
       className="h-full w-full relative"
-      style={{ minHeight: "400px", zIndex: 500 }}
+      style={{ minHeight: "400px", zIndex: 3 }}
     >
       {/* {focusFeature && (
         <div className="absolute bottom-4 right-4 z-[1000]">
