@@ -490,21 +490,24 @@ export default function WfsAnalyzer() {
         }
 
         // Parse bbox from URL (format: minx,miny,maxx,maxy)
+        let parsedBbox: BBoxFilter | null = null;
         if (bboxParam) {
           const parts = bboxParam.split(",").map(Number);
           if (parts.length === 4 && parts.every((n) => !isNaN(n))) {
             console.log("Parsed bbox from URL:", parts);
-            setBboxFilter({
+            parsedBbox = {
               minx: parts[0],
               miny: parts[1],
               maxx: parts[2],
               maxy: parts[3]
-            });
+            };
+            setBboxFilter(parsedBbox);
           }
         }
 
+        // Pass parsed values directly to avoid stale state issues
         setTimeout(() => {
-          analyzeWfsUrl(wfsParam);
+          analyzeWfsUrl(wfsParam, parsedBbox, parsedFilters);
         }, 0);
       }
 
@@ -552,6 +555,12 @@ export default function WfsAnalyzer() {
   // Also handles single-layer WFS when bbox/filters need to be applied
   const urlLayerLoadedRef = useRef(false);
   useEffect(() => {
+    console.log('Layer load effect running:', {
+      urlLayerLoadedRef: urlLayerLoadedRef.current,
+      availableLayersLength: availableLayers.length,
+      bboxFilter,
+      initialFiltersLength: initialFilters.length
+    });
     if (
       typeof window !== "undefined" &&
       !urlLayerLoadedRef.current &&
@@ -585,15 +594,18 @@ export default function WfsAnalyzer() {
       ) {
         // Single layer WFS with bbox/filters from URL - need to fetch with the filters applied
         layerToLoad = availableLayers[0];
+        console.log('Single layer with bbox/filters, will load layer:', layerToLoad?.id);
       }
 
       if (layerToLoad) {
         urlLayerLoadedRef.current = true;
         const layer = layerToLoad;
+        const bboxToUse = bboxFilter; // Capture in closure
+        console.log('Setting urlLayerLoadedRef=true, scheduling fetch with bbox:', bboxToUse);
         setTimeout(() => {
           setSelectedLayer(layer);
-          // Use bboxFilter from state (already parsed from URL in initial effect)
-          fetchLayerDataWithMaxFeatures(layer, maxFeatures, wfsUrl, bboxFilter);
+          // Use captured bboxFilter value
+          fetchLayerDataWithMaxFeatures(layer, maxFeatures, wfsUrl, bboxToUse);
         }, 0);
       }
     }
@@ -739,7 +751,8 @@ export default function WfsAnalyzer() {
   };
 
   // Function to analyze a WFS URL
-  const analyzeWfsUrl = async (url: string) => {
+  // urlBbox and urlFilters are passed from initial URL parsing to avoid stale state issues
+  const analyzeWfsUrl = async (url: string, urlBbox?: BBoxFilter | null, urlFilters?: AttributeFilter[]) => {
     if (!url.trim()) {
       setError(t("enterWfsUrl"));
       setErrorType("unknown");
@@ -750,6 +763,10 @@ export default function WfsAnalyzer() {
     const isWfsChange =
       lastAnalyzedUrlRef.current !== null &&
       lastAnalyzedUrlRef.current !== nextUrl;
+    
+    // Use passed values (for initial load) or current state (for subsequent calls)
+    const hasBboxFromUrl = urlBbox !== undefined ? !!urlBbox : !!bboxFilter;
+    const hasFiltersFromUrl = urlFilters !== undefined ? urlFilters.length > 0 : initialFilters.length > 0;
 
     // Reset all states
     setError(null);
@@ -806,8 +823,12 @@ export default function WfsAnalyzer() {
         setSelectedLayer(layers[0]);
         // Only auto-fetch if we don't have bbox/filters from URL that need to be applied
         // (those will be handled by the layer auto-select effect after state updates)
-        if (!bboxFilter && initialFilters.length === 0) {
+        console.log('analyzeWfsUrl: single layer, hasBboxFromUrl:', hasBboxFromUrl, 'hasFiltersFromUrl:', hasFiltersFromUrl);
+        if (!hasBboxFromUrl && !hasFiltersFromUrl) {
+          console.log('analyzeWfsUrl: calling fetchLayerData (no URL params)');
           await fetchLayerData(layers[0], cleanUrl);
+        } else {
+          console.log('analyzeWfsUrl: NOT calling fetchLayerData (will let effect handle with bbox/filters)');
         }
       }
       // If multiple layers, wait for user selection
@@ -1064,6 +1085,7 @@ export default function WfsAnalyzer() {
 
   // Update the fetchLayerData function to properly pass the URL to fetchLayerDataWithMaxFeatures
   const fetchLayerData = async (layer: LayerInfo, urlOverride?: string) => {
+    console.log('fetchLayerData called, current bboxFilter state:', bboxFilter);
     const urlToUse = urlOverride || wfsUrl;
     await fetchLayerDataWithMaxFeatures(
       layer,
@@ -1135,6 +1157,8 @@ export default function WfsAnalyzer() {
     urlOverride?: string,
     bbox?: BBoxFilter | null
   ) => {
+    console.log('fetchLayerDataWithMaxFeatures called with bbox:', bbox);
+    console.trace('fetchLayerDataWithMaxFeatures stack trace');
     setIsLoading(true);
     setError(null);
     setErrorType(null);
