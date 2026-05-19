@@ -331,9 +331,9 @@ function getEffectiveVersions(
 
 function buildCapabilitiesParams(version: string): URLSearchParams {
   const params = new URLSearchParams();
-  params.set("service", "WFS");
-  params.set("version", version);
-  params.set("request", "GetCapabilities");
+  params.set("SERVICE", "WFS");
+  params.set("VERSION", version);
+  params.set("REQUEST", "GetCapabilities");
   return params;
 }
 
@@ -345,14 +345,14 @@ function buildDescribeFeatureTypeParams(options: {
   const version = options.version || "2.0.0";
 
   const params = new URLSearchParams();
-  params.set("service", "WFS");
-  params.set("version", version);
-  params.set("request", "DescribeFeatureType");
+  params.set("SERVICE", "WFS");
+  params.set("VERSION", version);
+  params.set("REQUEST", "DescribeFeatureType");
 
   if (isWfs2(version)) {
-    params.set("typeNames", options.typeName);
+    params.set("TYPENAMES", options.typeName);
   } else {
-    params.set("typeName", options.typeName);
+    params.set("TYPENAME", options.typeName);
   }
 
   if (
@@ -361,7 +361,7 @@ function buildDescribeFeatureTypeParams(options: {
     options.typeName.includes(":")
   ) {
     const prefix = options.typeName.split(":")[0];
-    params.set("namespaces", `xmlns(${prefix},${options.namespaceUri})`);
+    params.set("NAMESPACES", `xmlns(${prefix},${options.namespaceUri})`);
   }
 
   return params;
@@ -388,34 +388,34 @@ function buildGetFeatureParams(options: {
   const version = options.version || "2.0.0";
 
   const params = new URLSearchParams();
-  params.set("service", "WFS");
-  params.set("version", version);
-  params.set("request", "GetFeature");
+  params.set("SERVICE", "WFS");
+  params.set("VERSION", version);
+  params.set("REQUEST", "GetFeature");
 
   if (isWfs2(version)) {
-    params.set("typeNames", options.layerId);
+    params.set("TYPENAMES", options.layerId);
 
     if (options.maxFeatures !== undefined) {
-      params.set("count", String(options.maxFeatures));
+      params.set("COUNT", String(options.maxFeatures));
     }
   } else {
-    params.set("typeName", options.layerId);
+    params.set("TYPENAME", options.layerId);
 
     if (options.maxFeatures !== undefined) {
-      params.set("maxFeatures", String(options.maxFeatures));
+      params.set("MAXFEATURES", String(options.maxFeatures));
     }
   }
 
   if (options.resultType) {
-    params.set("resultType", options.resultType);
+    params.set("RESULTTYPE", options.resultType);
   }
 
   if (options.outputFormat) {
-    params.set("outputFormat", options.outputFormat);
+    params.set("OUTPUTFORMAT", options.outputFormat);
   }
 
   if (options.srsName) {
-    params.set("srsName", options.srsName);
+    params.set("SRSNAME", options.srsName);
   }
 
   // Add BBOX parameter if provided
@@ -457,22 +457,22 @@ function buildGetFeatureParams(options: {
       
       if (isGeographic) {
         // Geographic: lat/lon order (miny, minx, maxy, maxx)
-        params.set("bbox", `${miny},${minx},${maxy},${maxx},${crsUrn}`);
+        params.set("BBOX", `${miny},${minx},${maxy},${maxx},${crsUrn}`);
       } else {
         // Projected: x/y order (minx, miny, maxx, maxy)
-        params.set("bbox", `${minx},${miny},${maxx},${maxy},${crsUrn}`);
+        params.set("BBOX", `${minx},${miny},${maxx},${maxy},${crsUrn}`);
       }
     } else {
       // WFS 1.x: Always uses x/y order (minx, miny, maxx, maxy)
-      params.set("bbox", `${minx},${miny},${maxx},${maxy},${bboxCrs}`);
+      params.set("BBOX", `${minx},${miny},${maxx},${maxy},${bboxCrs}`);
     }
   } else if (options.bbox) {
     // No layer projections info available, default to WGS84
     const { minx, miny, maxx, maxy } = options.bbox;
     if (isWfs2(version)) {
-      params.set("bbox", `${miny},${minx},${maxy},${maxx},urn:ogc:def:crs:EPSG::4326`);
+      params.set("BBOX", `${miny},${minx},${maxy},${maxx},urn:ogc:def:crs:EPSG::4326`);
     } else {
-      params.set("bbox", `${minx},${miny},${maxx},${maxy},EPSG:4326`);
+      params.set("BBOX", `${minx},${miny},${maxx},${maxy},EPSG:4326`);
     }
   }
 
@@ -482,7 +482,7 @@ function buildGetFeatureParams(options: {
     options.layerId.includes(":")
   ) {
     const prefix = options.layerId.split(":")[0];
-    params.set("namespaces", `xmlns(${prefix},${options.namespaceUri})`);
+    params.set("NAMESPACES", `xmlns(${prefix},${options.namespaceUri})`);
   }
 
   return params;

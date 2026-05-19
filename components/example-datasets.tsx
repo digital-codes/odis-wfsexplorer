@@ -24,26 +24,26 @@ export function ExampleDatasets({ onSelectDataset }: ExampleDatasetsProps) {
       nameKey: "berlinCemeteries",
       url: "https://gdi.berlin.de/services/wms/friedhofsbestand",
       descriptionKey: "berlinCemeteriesDesc",
-      icon: <Database className="h-4 w-4" />,
+      icon: <Database className="h-4 w-4" />
     },
     {
       nameKey: "berlinBlocks",
       url: "https://gdi.berlin.de/services/wfs/bloecke",
       descriptionKey: "berlinBlocksDesc",
-      icon: <Map className="h-4 w-4" />,
+      icon: <Map className="h-4 w-4" />
     },
     {
       nameKey: "berlinHikingTrails",
-      url: "https://gdi.berlin.de/services/wfs/gruene_wege?REQUEST=GetCapabilities&SERVICE=wfs",
+      url: "https://gdi.berlin.de/services/wfs/gruene_wege",
       descriptionKey: "berlinHikingTrailsDesc",
-      icon: <Route className="h-4 w-4" />,
+      icon: <Route className="h-4 w-4" />
     },
     {
       nameKey: "berlinEnergy",
       url: "https://gdi.berlin.de/services/wfs/ua_stromverbrauch",
       descriptionKey: "berlinEnergyDesc",
-      icon: <Route className="h-4 w-4" />,
-    },
+      icon: <Route className="h-4 w-4" />
+    }
   ];
 
   return (
